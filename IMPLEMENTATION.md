@@ -187,6 +187,57 @@ sudo systemctl restart ssh
 
 ---
 
+### 2.7 SSH client setup from WSL2 — [workstation]
+
+If your SSH keys live under the Windows profile (e.g. `/mnt/c/Users/<you>/.ssh`), copy them
+into WSL's native filesystem instead of using them in place — `/mnt/c` is a drvfs mount that
+can't represent Unix permissions, so `sshd`/`ssh` reject a key there as too open.
+
+```bash
+mkdir -p ~/.ssh
+cp "/mnt/c/Users/<you>/.ssh/k8s-pi"     ~/.ssh/
+cp "/mnt/c/Users/<you>/.ssh/k8s-pi.pub" ~/.ssh/
+cp "/mnt/c/Users/<you>/.ssh/known_hosts" ~/.ssh/   # carries over already-trusted host keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/k8s-pi
+chmod 644 ~/.ssh/k8s-pi.pub ~/.ssh/known_hosts
+```
+
+Then create `~/.ssh/config` (WSL-native, `chmod 600`) with the same host entries used on the
+Windows side:
+
+```
+Host k8s-cp-1
+    HostName 192.168.1.11
+    User ubuntu
+    IdentityFile ~/.ssh/k8s-pi
+
+Host k8s-w-1
+    HostName 192.168.1.21
+    User ubuntu
+    IdentityFile ~/.ssh/k8s-pi
+```
+
+Now `ssh k8s-cp-1` / `ssh k8s-w-1` work directly.
+
+**Running the same command on both nodes at once** — use tmux's synchronized-panes: split a
+window into two panes, SSH into each host, then mirror keystrokes across both.
+
+```bash
+tmux new-session -d -s k8s -x 220 -y 50 \; \
+  send-keys 'ssh k8s-cp-1' C-m \; \
+  split-window -h \; \
+  send-keys 'ssh k8s-w-1' C-m \; \
+  set-window-option synchronize-panes on
+tmux attach -t k8s
+```
+
+- Toggle sync: `Ctrl-b :` then `set synchronize-panes on` / `off` — turn it **off** before
+  anything host-specific (e.g. checking `hostname`).
+- Switch panes: `Ctrl-b` + arrow key. Detach: `Ctrl-b d`. Kill session: `tmux kill-session -t k8s`.
+
+---
+
 ## 3. Node prerequisites — [ALL]
 
 ```bash
