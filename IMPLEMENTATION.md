@@ -241,13 +241,18 @@ tmux attach -t k8s
 ## 3. Node prerequisites — [ALL]
 
 ```bash
-# Disable swap (kubelet requires it)
+# Disable swap (kubelet requires it — with swap on, the kubelet either refuses to
+# start or (pre-1.22 semantics aside) memory accounting/eviction gets unreliable)
 sudo swapoff -a
 sudo sed -i '/swap/d' /etc/fstab
-# On Ubuntu 24.04 zram-swap may also be active:
+# On Ubuntu 24.04 zram-swap may also be active — it's still swap, so kubelet sees
+# the same problem even after the line above:
 sudo systemctl disable --now zramswap.service 2>/dev/null || true
 
-# Kernel modules
+# Kernel modules:
+#   overlay      — containerd stores image/container layers on OverlayFS
+#   br_netfilter — makes bridged traffic (pod-to-pod via the CNI bridge) visible
+#                  to iptables, otherwise kube-proxy's rules never see it
 cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
 overlay
 br_netfilter
@@ -255,7 +260,9 @@ EOF
 sudo modprobe overlay
 sudo modprobe br_netfilter
 
-# Sysctl (bridge + IP forward)
+# Sysctl: the two bridge-nf settings pair with br_netfilter above (iptables must
+# actually inspect bridged packets), and ip_forward lets the node route packets
+# between pods/nodes instead of just its own processes.
 cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
 net.bridge.bridge-nf-call-iptables  = 1
 net.bridge.bridge-nf-call-ip6tables = 1
@@ -273,12 +280,20 @@ sudo sysctl --system
 
 ## 4. Container runtime — containerd — [ALL]
 
+kubelet doesn't run containers itself — it talks to a CRI-compatible runtime, and
+containerd is that runtime here.
+
 ```bash
 sudo apt update
 sudo apt install -y containerd
 sudo mkdir -p /etc/containerd
+# The apt package ships with no config file at all, so generate the shipped
+# defaults first — skipping this is exactly what breaks the sed below (no file
+# to edit). See the config-toml troubleshooting note if you hit that.
 containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
-# systemd cgroup driver (required by kubelet)
+# systemd cgroup driver (required by kubelet) — Ubuntu's init system is systemd,
+# so kubelet and the container runtime both need to manage cgroups the same way;
+# a mismatch here is a classic cause of kubelet failing to start.
 sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
 sudo systemctl restart containerd
 sudo systemctl enable containerd
@@ -287,6 +302,10 @@ sudo systemctl enable containerd
 ---
 
 ## 5. kubeadm, kubelet, kubectl — [ALL]
+
+Ubuntu's own repos don't carry current Kubernetes packages, so this adds the
+upstream `pkgs.k8s.io` apt repo (GPG-signed, so apt can verify what it installs)
+and pulls the three binaries from there instead.
 
 ```bash
 sudo apt install -y apt-transport-https ca-certificates curl gpg
@@ -312,12 +331,18 @@ sudo apt-mark hold kubelet kubeadm kubectl
 
 ### 6.1 Control-plane init — [CP]
 
+`kubeadm init` stands up etcd, the API server, scheduler and controller-manager
+as static pods on this node. `--pod-network-cidr` must match what the CNI
+(Calico, next step) expects, and pinning `--apiserver-advertise-address`
+avoids kubeadm guessing the wrong NIC on a multi-interface host.
+
 ```bash
 sudo kubeadm init \
   --pod-network-cidr=10.244.0.0/16 \
   --apiserver-advertise-address=<CP_IP>
 
-# kubeconfig for your user
+# kubeconfig for your user — admin.conf is written root-owned; kubectl reads
+# $HOME/.kube/config by default, so copy it out and hand it to your own user
 mkdir -p $HOME/.kube
 sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
@@ -338,6 +363,9 @@ kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/
 > pods should be `Running`.
 
 ### 6.3 Worker join — [W]
+
+The token and CA cert hash let the worker's kubelet authenticate to the API
+server and complete TLS bootstrap without you manually distributing certs.
 
 ```bash
 # command copied from the 6.1 output, as root:
@@ -365,7 +393,14 @@ kubectl get nodes -o wide      # both Ready
 
 ## 7. Storage
 
+A bare-metal cluster has no cloud disk API to satisfy PVCs automatically, so one
+of these two provisioners has to fill that role.
+
 ### Option A — local-path-provisioner (simple, node-local)
+
+Provisions a PV as a plain directory on whichever node the pod happens to land
+on — no replication, but nothing extra to run. Fine for a home lab where
+losing one node's local data is acceptable.
 
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
@@ -375,7 +410,11 @@ kubectl patch storageclass local-path \
 
 ### Option B — Longhorn (replicated across nodes)
 
-Prerequisite — [ALL]:
+Replicates volumes across nodes so a single SSD/node failure doesn't lose data —
+the tradeoff is it runs its own storage stack on top of Kubernetes.
+
+Prerequisite — [ALL]: Longhorn's data path talks to storage over iSCSI, and can
+also export NFS-backed volumes, so both clients need to already be installed.
 
 ```bash
 sudo apt install -y open-iscsi nfs-common
@@ -385,11 +424,107 @@ sudo systemctl enable --now iscsid
 Install on [CP] (Helm or manifest). With 2 nodes set the replica count to `2` so each SSD
 holds a copy.
 
+### 7.1 Longhorn backups → S3 — [CP]
+
+Replication (above) only protects against a single node/SSD failing — it doesn't help if
+the whole cluster goes down (both Pis, a bad `kubectl apply`, a corrupted volume). Longhorn
+has a built-in S3 backup target, so volume snapshots ship off both SSDs entirely.
+
+1. **S3 bucket + a scoped IAM user** — run once, from your PC with the AWS CLI configured.
+   A dedicated user with access to only this bucket limits the blast radius if the key ever
+   leaks:
+
+   ```bash
+   aws s3api create-bucket --bucket <your-bucket> --region <region> \
+     --create-bucket-configuration LocationConstraint=<region>
+
+   aws iam create-user --user-name longhorn-backup
+   aws iam put-user-policy --user-name longhorn-backup --policy-name longhorn-s3-backup \
+     --policy-document '{
+       "Version": "2012-10-17",
+       "Statement": [{
+         "Effect": "Allow",
+         "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+         "Resource": ["arn:aws:s3:::<your-bucket>", "arn:aws:s3:::<your-bucket>/*"]
+       }]
+     }'
+   aws iam create-access-key --user-name longhorn-backup   # save the AccessKeyId/SecretAccessKey
+   ```
+
+2. **Give Longhorn the credentials**, as a Secret in its own namespace — never on an SSD in
+   plaintext outside the cluster:
+
+   ```bash
+   kubectl -n longhorn-system create secret generic longhorn-s3-backup \
+     --from-literal=AWS_ACCESS_KEY_ID=<access-key-id> \
+     --from-literal=AWS_SECRET_ACCESS_KEY=<secret-access-key>
+   ```
+
+3. **Point Longhorn at the bucket** by setting the backup target (Settings → General in the
+   Longhorn UI, or via `kubectl`):
+
+   ```bash
+   kubectl -n longhorn-system patch settings.longhorn.io backup-target \
+     --type merge -p '{"value":"s3://<your-bucket>@<region>/backupstore"}'
+   kubectl -n longhorn-system patch settings.longhorn.io backup-target-credential-secret \
+     --type merge -p '{"value":"longhorn-s3-backup"}'
+   ```
+
+4. **Schedule recurring backups** with a `RecurringJob` — without one, backups only happen
+   when you trigger them by hand:
+
+   ```yaml
+   # recurringjob-daily-backup.yaml
+   apiVersion: longhorn.io/v1beta2
+   kind: RecurringJob
+   metadata:
+     name: daily-backup
+     namespace: longhorn-system
+   spec:
+     cron: "0 3 * * *"    # 03:00 daily, off-hours
+     task: backup
+     groups:
+       - default
+     retain: 7             # keep the last 7 backups in S3
+     concurrency: 2
+   ```
+
+   ```bash
+   kubectl apply -f recurringjob-daily-backup.yaml
+   ```
+
+   Volumes only get backed up if they're in the job's group. Add the group to the
+   StorageClass so every future PVC is covered automatically, rather than labelling
+   volumes one by one:
+
+   ```bash
+   kubectl patch storageclass longhorn \
+     -p '{"parameters":{"recurringJobSelector":"[{\"name\":\"daily-backup\",\"isGroup\":true}]"}}'
+   ```
+
+5. **Verify** — after the first scheduled run (or trigger one manually from the Longhorn
+   UI), confirm the backup landed:
+
+   ```bash
+   kubectl -n longhorn-system get backups.longhorn.io
+   aws s3 ls s3://<your-bucket>/backupstore/ --recursive
+   ```
+
+> An untested backup isn't a backup. Periodically restore a volume from S3 into a scratch
+> PVC (Longhorn UI → Backup → Restore) to confirm the whole path actually works, not just
+> that objects are landing in the bucket.
+
 ---
 
 ## 8. Networking / add-ons — [CP]
 
 ### MetalLB (LoadBalancer IPs on the LAN)
+
+On a cloud cluster, `Service type: LoadBalancer` asks the cloud provider for a
+real IP; bare metal has no provider to ask, so `LoadBalancer` Services just
+hang in `Pending` forever without something to fill that role. MetalLB does —
+it hands out IPs from a pool you define and announces them on the LAN (ARP/L2
+here) so they're reachable from other devices on the network.
 
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
@@ -419,6 +554,10 @@ spec:
 
 ### ingress-nginx
 
+Without an ingress controller, every HTTP service you want to expose needs its
+own MetalLB IP. ingress-nginx gives you one entrypoint IP and routes by
+hostname/path to whichever internal Service each request is for.
+
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/cloud/deploy.yaml
 ```
@@ -429,6 +568,10 @@ the MetalLB pool.
 ---
 
 ## 9. GitOps — Flux CD — [CP]
+
+Flux watches a git repo and continuously reconciles the cluster to match what's
+committed, so `git push` becomes the deploy mechanism instead of manual
+`kubectl apply` — and cluster state stays reviewable/revertible via git history.
 
 ```bash
 curl -s https://fluxcd.io/install.sh | sudo bash
