@@ -612,6 +612,7 @@ vcgencmd get_throttled
 - Node status: `kubectl get nodes`, `kubectl top nodes` (after installing metrics-server).
 - Regular `apt upgrade` — but `kubelet/kubeadm/kubectl` are on `hold`; upgrade those
   deliberately, per version, by hand (following the `kubeadm upgrade` workflow).
+- Powering the cluster down or back up: see [SHUTDOWN.md](SHUTDOWN.md).
 
 ## Check Pimoroni fan shim service
 ```bash
