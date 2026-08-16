@@ -12,10 +12,10 @@ Notation: **[CP]** = control-plane node only, **[W]** = worker node only,
 
 | Network | Suggested range | Notes |
 |---|---|---|
-| LAN (nodes) | `192.168.0.0/24` (gateway `192.168.0.1`) | your router's subnet |
-| Node static IPs | `192.168.0.11` (CP), `192.168.0.12` (W) | DHCP reservation or netplan |
+| LAN (nodes) | `192.168.1.0/24` (gateway `192.168.1.1`) | your router's subnet |
+| Node static IPs | `192.168.1.11` (CP), `192.168.1.21` (W) | DHCP reservation or netplan |
 | Pod CIDR | `10.244.0.0/16` | **must not** overlap the LAN |
-| MetalLB pool | `192.168.0.240–192.168.0.250` | free range inside the LAN |
+| MetalLB pool | `192.168.1.240–192.168.1.250` | free range inside the LAN |
 
 > ⚠️ **Important:** Calico's default `192.168.0.0/16` pod CIDR overlaps the typical home
 > `192.168.x.0/24` LAN, which causes hard-to-debug routing issues. That's why we use
@@ -138,7 +138,7 @@ You couldn't set this before boot because you didn't have the MAC yet. Now you d
 
 2. Pin the IP — pick **one** approach:
    - **DHCP reservation (recommended):** on your router, bind that MAC → chosen IP
-     (`192.168.0.11` for CP, `192.168.0.12` for the worker), then reboot the Pi.
+     (`192.168.1.11` for CP, `192.168.1.21` for the worker), then reboot the Pi.
    - **Static via netplan on the Pi:**
 
      ```yaml
@@ -148,12 +148,12 @@ You couldn't set this before boot because you didn't have the MAC yet. Now you d
        ethernets:
          eth0:
            dhcp4: false
-           addresses: [192.168.0.11/24]
+           addresses: [192.168.1.11/24]
            routes:
              - to: default
-               via: 192.168.0.1
+               via: 192.168.1.1
            nameservers:
-             addresses: [192.168.0.1, 1.1.1.1]
+             addresses: [192.168.1.1, 1.1.1.1]
      ```
 
      Then `sudo netplan apply`.
@@ -345,7 +345,7 @@ avoids kubeadm guessing the wrong NIC on a multi-interface host.
 ```bash
 sudo kubeadm init \
   --pod-network-cidr=10.244.0.0/16 \
-  --apiserver-advertise-address=<CP_IP>
+  --apiserver-advertise-address=192.168.1.11
 
 # kubeconfig for your user — admin.conf is written root-owned; kubectl reads
 # $HOME/.kube/config by default, so copy it out and hand it to your own user
@@ -546,7 +546,7 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-    - 192.168.0.240-192.168.0.250
+    - 192.168.1.240-192.168.1.250
 ---
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
