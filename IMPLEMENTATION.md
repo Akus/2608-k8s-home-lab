@@ -241,6 +241,12 @@ tmux attach -t k8s
 ## 3. Node prerequisites — [ALL]
 
 ```bash
+# conntrack: kubeadm preflight checks require it (kube-proxy uses it for connection
+# tracking) but it's not pulled in by containerd or the kubelet/kubeadm packages, so
+# it has to be installed explicitly or `kubeadm init`/`join` fails preflight.
+sudo apt update
+sudo apt install -y conntrack
+
 # Disable swap (kubelet requires it — with swap on, the kubelet either refuses to
 # start or (pre-1.22 semantics aside) memory accounting/eviction gets unreliable)
 sudo swapoff -a
@@ -607,6 +613,10 @@ vcgencmd get_throttled
 - Regular `apt upgrade` — but `kubelet/kubeadm/kubectl` are on `hold`; upgrade those
   deliberately, per version, by hand (following the `kubeadm upgrade` workflow).
 
+## Check Pimoroni fan shim service
+```bash
+sudo systemctl status pimoroni-fanshim.service
+```
 ---
 
 ## Troubleshooting — common spots
