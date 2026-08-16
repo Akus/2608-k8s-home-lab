@@ -402,6 +402,11 @@ kubectl get nodes -o wide      # both Ready
 A bare-metal cluster has no cloud disk API to satisfy PVCs automatically, so one
 of these two provisioners has to fill that role.
 
+> **This cluster runs Option A (local-path-provisioner).** §7.1 below (Longhorn S3
+> backups) does not apply — it's kept for reference in case Longhorn is adopted later.
+> Since local-path volumes aren't replicated, back up anything you can't afford to lose
+> by other means (e.g. an app-level backup, or `kubectl cp`/rsync off the node).
+
 ### Option A — local-path-provisioner (simple, node-local)
 
 Provisions a PV as a plain directory on whichever node the pod happens to land
