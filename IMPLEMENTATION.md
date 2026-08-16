@@ -541,7 +541,10 @@ here) so they're reachable from other devices on the network.
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
 ```
 
-Then an IP pool from the free range of the LAN:
+Then an IP pool from the free range of the LAN. The manifest lives in this repo at
+[`clusters/home-lab/metallb/ipaddresspool.yaml`](clusters/home-lab/metallb/ipaddresspool.yaml)
+— that path matches the Flux `--path` used in §9, so it doesn't need to move once Flux
+takes over reconciliation:
 
 ```yaml
 apiVersion: metallb.io/v1beta1
@@ -561,6 +564,10 @@ metadata:
 spec:
   ipAddressPools:
     - home-pool
+```
+
+```bash
+kubectl apply -f clusters/home-lab/metallb/ipaddresspool.yaml
 ```
 
 ### ingress-nginx
