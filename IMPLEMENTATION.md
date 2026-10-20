@@ -583,6 +583,27 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/cont
 The `ingress-nginx-controller` Service will be of type `LoadBalancer` and gets an IP from
 the MetalLB pool.
 
+### metrics-server
+
+Collects CPU/memory usage from each kubelet; needed for `kubectl top` (and for a
+HorizontalPodAutoscaler, should you ever use one).
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+
+# kubeadm's kubelets serve a self-signed certificate (no serverTLSBootstrap), which
+# metrics-server refuses by default -> pods never get Ready and `kubectl top` errors.
+# Skip verifying it (traffic is still TLS-encrypted, just not authenticated):
+kubectl -n kube-system patch deployment metrics-server --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
+kubectl -n kube-system rollout status deploy/metrics-server
+kubectl top nodes        # takes ~30 s after rollout for the first numbers
+```
+
+The proper alternative is setting `serverTLSBootstrap: true` in each node's kubelet config
+and approving the kubelets' CSRs (`kubectl certificate approve`) — not worth it for a LAN lab.
+
 ---
 
 ## 9. GitOps — Flux CD — [CP]
@@ -621,7 +642,7 @@ vcgencmd get_throttled
 ```
 
 - If it stays **above 70 °C** → consider switching to dual fan.
-- Node status: `kubectl get nodes`, `kubectl top nodes` (after installing metrics-server).
+- Node status: `kubectl get nodes`, `kubectl top nodes` / `kubectl top pods -A` (metrics-server, see §8).
 - Regular `apt upgrade` — but `kubelet/kubeadm/kubectl` are on `hold`; upgrade those
   deliberately, per version, by hand (following the `kubeadm upgrade` workflow).
 - Powering the cluster down or back up: see [SHUTDOWN.md](SHUTDOWN.md).
