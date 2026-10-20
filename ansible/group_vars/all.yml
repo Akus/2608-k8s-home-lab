@@ -1,0 +1,19 @@
+# Repo minor for pkgs.k8s.io (see IMPLEMENTATION.md §5); bump deliberately.
+k8s_minor: "1.31"
+
+pod_cidr: 10.244.0.0/16
+apiserver_advertise_address: "{{ hostvars[groups['control_plane'][0]].ansible_host }}"
+calico_manifest: https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+
+# Extra kernel cmdline args needed on this hardware (appended once if missing).
+# Add USB quirks here if needed, e.g. "usb-storage.quirks=18a5:0468:u".
+cmdline_args:
+  - cgroup_enable=cpuset
+  - cgroup_enable=memory
+  - cgroup_memory=1
+
+# Let pods schedule on the control-plane (2-node cluster).
+untaint_control_plane: true
+
+# Where the admin kubeconfig is fetched to on your workstation.
+kubeconfig_dest: "{{ lookup('env', 'HOME') }}/.kube/config-home-lab"

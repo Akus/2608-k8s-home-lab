@@ -1,0 +1,66 @@
+---
+- name: Install prerequisites (conntrack required by kubeadm preflight)
+  ansible.builtin.apt:
+    name: [conntrack, apt-transport-https, ca-certificates, curl, gpg]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Turn swap off now
+  ansible.builtin.command: swapoff -a
+  when: ansible_swaptotal_mb > 0
+  changed_when: true
+
+- name: Remove swap entries from fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '\sswap\s'
+    state: absent
+
+- name: Disable zram swap if present
+  ansible.builtin.systemd_service:
+    name: zramswap.service
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Load kernel modules at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: "0644"
+
+- name: Load kernel modules now
+  community.general.modprobe:
+    name: "{{ item }}"
+  loop: [overlay, br_netfilter]
+
+- name: Set Kubernetes sysctls
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    sysctl_file: /etc/sysctl.d/k8s.conf
+    reload: true
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+    - net.ipv4.ip_forward
+
+- name: Read kernel cmdline
+  ansible.builtin.slurp:
+    src: /boot/firmware/cmdline.txt
+  register: cmdline_raw
+
+- name: Append missing cmdline args (single line)
+  ansible.builtin.copy:
+    dest: /boot/firmware/cmdline.txt
+    content: >-
+      {{ (cmdline_raw.content | b64decode | trim)
+         ~ ' ' ~ (cmdline_args | reject('in', cmdline_raw.content | b64decode | trim | split(' ')) | join(' ')) }}
+    mode: "0755"
+  when: cmdline_args | reject('in', cmdline_raw.content | b64decode | trim | split(' ')) | list | length > 0
+  notify: Reboot node
+
+- name: Apply pending reboot now
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,48 @@
+---
+- name: kubeadm init
+  ansible.builtin.command: >
+    kubeadm init
+    --pod-network-cidr={{ pod_cidr }}
+    --apiserver-advertise-address={{ apiserver_advertise_address }}
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Create ~/.kube for the login user
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Install kubeconfig for the login user
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/{{ ansible_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+
+- name: Fetch kubeconfig to workstation
+  ansible.builtin.fetch:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ kubeconfig_dest }}"
+    flat: true
+
+- name: Apply Calico CNI
+  ansible.builtin.command: kubectl apply -f {{ calico_manifest }}
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  changed_when: false
+
+- name: Remove control-plane taint
+  ansible.builtin.command: >
+    kubectl taint nodes {{ inventory_hostname }}
+    node-role.kubernetes.io/control-plane:NoSchedule-
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: untaint
+  failed_when: untaint.rc != 0 and 'not found' not in untaint.stderr
+  changed_when: "'untainted' in untaint.stdout"
+  when: untaint_control_plane
