@@ -604,6 +604,26 @@ kubectl top nodes        # takes ~30 s after rollout for the first numbers
 The proper alternative is setting `serverTLSBootstrap: true` in each node's kubelet config
 and approving the kubelets' CSRs (`kubectl certificate approve`) — not worth it for a LAN lab.
 
+### cert-manager (HTTPS via Let's Encrypt)
+
+Issues and renews TLS certs for the Ingresses: a Let's Encrypt wildcard for
+`*.lab.akos-demo.com`, validated with DNS-01 on the Route53 zone, so nothing has to be
+reachable from the internet. Full walkthrough (IAM user, issuers, DNS record) in
+[HTTPS-CERTS.md](HTTPS-CERTS.md), Option B.
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml
+
+# Check the ACME TXT record against public resolvers, not the LAN's (see HTTPS-CERTS.md B6):
+kubectl -n cert-manager patch deployment cert-manager --type=json -p='[
+  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--dns01-recursive-nameservers-only"},
+  {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53"}]'
+
+kubectl -n cert-manager create secret generic route53-credentials \
+  --from-literal=access-key-id=AKIA... --from-literal=secret-access-key=...
+kubectl apply -f clusters/home-lab/cert-manager/clusterissuers.yaml
+```
+
 ---
 
 ## 9. GitOps — Flux CD — [CP]

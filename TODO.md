@@ -1,18 +1,16 @@
 # TODO
 
-## Self-signed HTTPS for the web UIs
+## Finish HTTPS for the web UIs (Let's Encrypt on lab.akos-demo.com)
 
-The HIL lab (`2609-Java-Jenkins-CICD-for-Siemens-test-rigs`, namespace `hil-lab`) is served
-over plain HTTP via ingress-nginx: `jenkins`, `grafana`, `prometheus`, `rig-api` `.home.lan`.
+cert-manager and the ClusterIssuers are installed, and the lab repo's overlay has the wildcard
+Certificate and TLS Ingresses (not applied yet). Remaining, see HTTPS-CERTS.md Option B:
 
-- Install cert-manager (raw manifest, like the other add-ons in IMPLEMENTATION.md §8).
-- Create a self-signed root CA: a `selfSigned` ClusterIssuer issues a CA `Certificate`, and a
-  `ca` ClusterIssuer signs everything else with it (one CA to trust instead of one cert per site).
-- In the lab repo's `kubernetes/overlays/home-lab/ingress.yaml`: add
-  `cert-manager.io/cluster-issuer` and a `tls:` block per Ingress; switch `JENKINS_PUBLIC_URL`
-  and `GF_SERVER_ROOT_URL` in the overlay to `https://`.
-- Import the CA cert into Windows' "Trusted Root Certification Authorities" (and WSL's
-  `/usr/local/share/ca-certificates` + `update-ca-certificates`) so browsers don't warn.
+- B1: create the `cert-manager-home-lab` IAM user + access key, then the
+  `cert-manager/route53-credentials` Secret.
+- B5: Route53 A record `*.lab.akos-demo.com` → `192.168.1.240`.
+- In the lab repo: `kubectl apply -k kubernetes/overlays/home-lab` (switches the Ingresses from
+  `*.home.lan` to `*.lab.akos-demo.com`), wait for `lab-wildcard` to be Ready on staging, then
+  switch `certificate.yaml` to `letsencrypt-prod`.
 
 ## Update FLUX-MIGRATION-PLAN.md to the current cluster state
 
