@@ -1,138 +1,296 @@
-# Bring the Pi cluster under Flux (GitOps repo migration)
+# Bring the Pi cluster under Flux
 
-> Planning doc — not yet executed. Picks up on step 9 of IMPLEMENTATION.md.
+> Planning doc, not executed yet. Replaces IMPLEMENTATION.md §9's generic bootstrap. Rewritten
+> 2026-10-21 for the current cluster state; the earlier version only covered MetalLB +
+> ingress-nginx and planned to tear them down and reinstall them with Helm.
 
-## Context
+## Decisions
 
-The Pi cluster (this repo) currently has MetalLB and ingress-nginx installed
-by hand via raw `kubectl apply -f <manifest-url>`, per IMPLEMENTATION.md §8.
-§9 of that guide calls for switching to Flux CD so `git push` becomes the
-deploy mechanism, using the *same* git repo already used for the AKS
-clusters (`2607-flux-simple-kubernetes-cluster`, GitHub
-`Akus/flux-simple-kubernetes-cluster`) — adding a third `clusters/home-lab`
-path alongside the existing `clusters/nonprod` and `clusters/prod`.
+**Adopt what's running, don't reinstall it.** Every add-on was installed with
+`kubectl apply -f <url>` or `kubectl apply -k`. kustomize-controller applies plain manifests
+server-side and takes over objects that already exist (it removes kubectl's field managers),
+so wrapping each install in a `kustomization.yaml` that points at the same pinned upstream URL
+moves it under Flux with no teardown, no downtime and no new LoadBalancer IP. Switching to
+Helm `HelmRelease`s, like the AKS repo does, would mean deleting each install first:
+UIs down while MetalLB/ingress-nginx come back, and deleting cert-manager's CRDs takes every
+Certificate with it (re-issuing on prod counts against Let's Encrypt rate limits). That stays
+an option per component later, see "Later".
 
-That repo already manages ingress-nginx as a Flux `HelmRelease` (Helm-based),
-not raw manifests. Since the Pi's ingress-nginx and MetalLB were installed
-raw, Flux/Helm can't just "adopt" them — the raw-created objects have no Helm
-release metadata, so Helm would try to create resources that already exist
-and conflict. Decision made: **full migration** — tear down both raw
-installs and let Flux/Helm install both fresh, in the same Helm-managed style
-as the AKS clusters.
+**Bootstrap this repo (`Akus/2608-k8s-home-lab`), not the AKS repo.** All the home-lab
+manifests already live here under `clusters/home-lab/`. Putting them in
+`2607-flux-simple-kubernetes-cluster` would mean copying them over, and a home-lab push
+could break the AKS clusters, which share `infrastructure/controllers/`. If you want a
+single GitOps repo for all your clusters later, `clusters/home-lab/` can move over as one
+directory.
 
-Scope is deliberately narrow: only MetalLB + ingress-nginx for home-lab.
-`apps/`, `external-dns/`, `cert-manager`/`configs/` (Let's Encrypt via Route53,
-tied to the public `akos-demo.com` zone) are AKS/production-specific and are
-**not** touched or extended to home-lab.
+**In scope:** MetalLB (+ IP pool), ingress-nginx, metrics-server, local-path-provisioner,
+cert-manager (+ ClusterIssuers), the Litmus operator + faults, and the HIL lab from the lab
+repo.
 
-## Repo layout to add (in `2607-flux-simple-kubernetes-cluster`)
+**Out of scope:**
+- Calico: if a bad push breaks the CNI, the cluster loses networking, Flux included, and
+  can't fix itself. It stays a manual `kubectl apply` (IMPLEMENTATION.md §6.2).
+- Litmus ChaosEngines (`litmus/hil-lab/engines/`): one-off runs that are deleted and
+  re-applied by hand; Flux would fight that.
+- Secrets: `cert-manager/route53-credentials` and `hil-lab/lab-admin-credentials` stay
+  created by hand. Flux only prunes objects it created, so it leaves them alone. SOPS
+  can come later.
 
-New, additive directories only — nothing under the existing
-`infrastructure/controllers/` (shared by nonprod/prod) is modified, so the
-live AKS clusters are unaffected.
+## Prerequisite: finish HTTPS first
+
+The lab repo's `main` already has the `*.lab.akos-demo.com` Ingresses and the wildcard
+Certificate, but they haven't been applied (TODO.md, "Finish HTTPS"). The moment Flux
+reconciles the HIL lab, it applies them: the `*.home.lan` hostnames stop working, and the
+new ones only work once the Route53 credentials and A record exist. Do HTTPS-CERTS.md B1 and
+B5 and get `lab-wildcard` Ready before step 4 below. Alternatively, leave `hil-lab.yaml`
+out of the first bootstrap.
+
+## Repo layout
 
 ```
-infrastructure/home-lab/
-  metallb-controller/          # installs MetalLB itself (Helm chart + CRDs)
-    namespace.yaml             # ns: metallb-system
-    helmrepository.yaml        # HelmRepository "metallb" -> https://metallb.github.io/metallb
-    helmrelease.yaml           # HelmRelease "metallb", chart version "0.16.x"
-    kustomization.yaml
-  metallb-config/               # needs metallb-controller's CRDs to exist first
-    ipaddresspool.yaml          # moved from this repo's clusters/home-lab/metallb/
-    l2advertisement.yaml
-    kustomization.yaml
-  ingress-nginx/
-    namespace.yaml              # ns: ingress-nginx
-    helmrepository.yaml         # HelmRepository "ingress-nginx" (separate copy; each
-                                 # physical cluster reconciles its own flux-system, so
-                                 # this can't just reference the AKS one)
-    helmrelease.yaml            # HelmRelease "ingress-nginx", chart "4.11.x" — same
-                                 # shape as infrastructure/controllers/ingress-nginx.yaml
-                                 # but: service.type LoadBalancer (MetalLB fulfills it,
-                                 # same as Azure's LB does on AKS) and
-                                 # externalTrafficPolicy: Cluster instead of Local.
-    kustomization.yaml
-
 clusters/home-lab/
-  infrastructure.yaml           # 3 Kustomizations, ordered via dependsOn:
-                                 #   infra-metallb-controller -> ./infrastructure/home-lab/metallb-controller
-                                 #   infra-metallb-config (dependsOn controller) -> .../metallb-config
-                                 #   infra-ingress-nginx (dependsOn metallb-config) -> .../ingress-nginx
-  flux-system/                  # NOT hand-written — generated by `flux bootstrap` itself
+  kustomization.yaml                  NEW  what Flux applies from this path (see below)
+  flux-system/                        generated by `flux bootstrap`, never hand-edited
+  infrastructure.yaml                 NEW  one Flux Kustomization per component, ordered
+  hil-lab.yaml                        NEW  GitRepository + Kustomization for the lab repo
+  metallb/
+    controller/kustomization.yaml     NEW  metallb-native.yaml v0.14.8
+    kustomization.yaml                NEW  [ipaddresspool.yaml]
+    ipaddresspool.yaml                     unchanged
+  ingress-nginx/kustomization.yaml    NEW  deploy.yaml controller-v1.11.2 + IP pin
+  metrics-server/kustomization.yaml   NEW  components.yaml v0.7.2 + --kubelet-insecure-tls
+  local-path/kustomization.yaml       NEW  local-path-storage.yaml v0.0.30
+  cert-manager/
+    controller/kustomization.yaml     NEW  cert-manager.yaml v1.21.2 + DNS-01 resolver args
+    kustomization.yaml                NEW  [clusterissuers.yaml]
+    clusterissuers.yaml                    unchanged
+    route53-iam-policy.json                unchanged, not a k8s object
+  litmus/operator/                         unchanged
+  litmus/hil-lab/                          unchanged (its kustomization.yaml skips engines/)
 ```
 
-**Why `externalTrafficPolicy: Cluster` instead of `Local`** (deviation from
-the AKS ingress-nginx values): with MetalLB L2 mode, one node ARPs for the
-VIP at a time. `Local` only forwards to pods on the node that received the
-packet — with `replicaCount: 1` on a 2-node cluster, if the ingress-nginx pod
-ever lands on the node that isn't the current L2 leader, traffic blackholes
-until it moves. `Cluster` lets kube-proxy forward to the pod regardless of
-which node it's on, trading source-IP preservation (not a concern for a home
-LAN) for reliability.
+Each component is split into the upstream install (`controller/`) and the config that needs
+its CRDs (`IPAddressPool`, `ClusterIssuer`), so Flux can apply them in order.
 
-**MetalLB Helm values**: defaults are sufficient — native L2 mode is the
-chart default when no BGP config is set (confirmed against
-`metallb/metallb`'s `charts/metallb/values.yaml`), CRDs install automatically
-(`crds.enabled: true` by default). Only `install.crds: Create` /
-`upgrade.crds: CreateReplace` need setting on the HelmRelease, matching the
-existing ingress-nginx HelmRelease pattern in this repo.
+### `clusters/home-lab/kustomization.yaml`
 
-## Changes in this repo (`2608-k8s-home-lab`)
+Without it, Flux would build `clusters/home-lab/` by collecting every YAML file under it,
+recursively: the ChaosEngines would run on every reconcile, and the IAM policy JSON would
+fail to parse. This file limits Flux to the Flux objects:
 
-- Delete `clusters/home-lab/metallb/ipaddresspool.yaml` — superseded, now
-  lives in the Flux repo.
-- Update IMPLEMENTATION.md:
-  - §8: note MetalLB + ingress-nginx are now Flux/Helm-managed; point at the
-    new location in `2607-flux-simple-kubernetes-cluster` instead of the raw
-    `kubectl apply -f` commands (kept as historical/what-happened context,
-    clearly marked superseded rather than deleted outright).
-  - §9: replace the generic `<gh-user>`/`<repo>` placeholder bootstrap
-    command with the real one actually used (owner `Akus`, repo
-    `flux-simple-kubernetes-cluster`, path `clusters/home-lab`).
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flux-system
+  - infrastructure.yaml
+  - hil-lab.yaml
+```
 
-## Changes in `2607-flux-simple-kubernetes-cluster` README.md
+### Component kustomizations
 
-Add `home-lab` as a third cluster in the "Layout" and "Bootstrap" sections,
-matching the existing nonprod/prod entries' format and tone.
+Same pattern as [`litmus/operator/kustomization.yaml`](clusters/home-lab/litmus/operator/kustomization.yaml):
+the pinned upstream URL, and the patches that were applied by hand become kustomize
+patches. They have to: Flux's server-side apply owns the whole `args` list and would drop the
+hand-patched flags on the first reconcile.
+
+```yaml
+# metrics-server/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+patches:
+  - target: { kind: Deployment, name: metrics-server }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kubelet-insecure-tls
+```
+
+```yaml
+# cert-manager/controller/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml
+patches:
+  - target: { kind: Deployment, name: cert-manager }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --dns01-recursive-nameservers-only
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53
+```
+
+```yaml
+# ingress-nginx/kustomization.yaml: pin the IP the Route53 A record points at, so a
+# re-created Service can't come back with a different one from the pool.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/cloud/deploy.yaml
+patches:
+  - target: { kind: Service, name: ingress-nginx-controller }
+    patch: |-
+      - op: add
+        path: /metadata/annotations/metallb.universe.tf~1loadBalancerIPs
+        value: 192.168.1.240
+```
+
+`metallb/controller/` and `local-path/` are just the URL. kustomize-controller fetches remote
+URLs by default (`--no-remote-bases=false`). Vendoring the files into the repo instead makes
+reconciles independent of GitHub's uptime, at the cost of bigger diffs on upgrades.
+
+### `clusters/home-lab/infrastructure.yaml`
+
+Same shape as `2607-flux-simple-kubernetes-cluster/clusters/nonprod/infrastructure.yaml`
+(`interval: 30m`, `retryInterval: 1m`, `prune: true`, `wait: true`, `sourceRef: flux-system`),
+one entry per component:
+
+| Flux Kustomization | path (under `./clusters/home-lab/`) | dependsOn |
+|---|---|---|
+| `infra-metallb` | `metallb/controller` | |
+| `infra-metallb-config` | `metallb` | `infra-metallb` |
+| `infra-ingress-nginx` | `ingress-nginx` | `infra-metallb-config` |
+| `infra-local-path` | `local-path` | |
+| `infra-metrics-server` | `metrics-server` | |
+| `infra-cert-manager` | `cert-manager/controller` | |
+| `infra-cert-manager-issuers` | `cert-manager` | `infra-cert-manager` |
+| `infra-litmus-operator` | `litmus/operator` | |
+| `infra-litmus-faults` | `litmus/hil-lab` | `infra-litmus-operator` |
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infra-metallb-config
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-metallb
+  interval: 30m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./clusters/home-lab/metallb
+  prune: true
+  wait: true
+```
+
+### `clusters/home-lab/hil-lab.yaml`
+
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: hil-lab
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: https://github.com/Akus/2609-Java-Jenkins-CICD-for-Siemens-test-rigs   # public, no auth
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: hil-lab
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: infra-ingress-nginx
+    - name: infra-cert-manager-issuers
+    - name: infra-local-path
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef:
+    kind: GitRepository
+    name: hil-lab
+  path: ./kubernetes/overlays/home-lab
+  prune: true
+  wait: true
+```
+
+## Change in the lab repo
+
+`kubernetes/overlays/home-lab/kustomization.yaml` builds `lab-admin-credentials` with a
+`secretGenerator` from the gitignored `secrets.env`, which Flux's clone doesn't have, so the
+build would fail. Drop the `secretGenerator` and create the Secret by hand. It already
+exists on the cluster, so nothing changes there. Update `kubernetes/README.md` with the
+one-time command:
+
+```bash
+kubectl -n hil-lab create secret generic lab-admin-credentials --from-env-file=secrets.env
+```
 
 ## Execution order
 
-1. **Repo-side prep** (both repos, local edits + commit + push) — everything
-   above. Done before touching the live cluster so there's something for
-   Flux to reconcile the moment it's bootstrapped.
-2. **Tear down the raw installs on cp-1** (via SSH, already have
-   `k8s-cp-1`/`k8s-w-1` SSH access and a working `kubectl` on the laptop):
+1. **Write the files** above in both repos. Don't push yet.
+2. **Dry-run the adoption.** For each component directory, check what taking it over would
+   change. The output should be empty apart from the new IP-pin annotation, because
+   the manifests are the ones already applied:
    ```bash
-   kubectl delete -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/cloud/deploy.yaml
-   kubectl delete -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
+   for d in metallb/controller metallb ingress-nginx local-path metrics-server \
+            cert-manager/controller cert-manager litmus/operator litmus/hil-lab; do
+     echo "== $d"; kubectl diff --server-side -k clusters/home-lab/$d
+   done
    ```
-   Deleting the MetalLB CRDs cascades to delete the `IPAddressPool`/
-   `L2Advertisement` objects too — expected; Flux recreates them fresh in the
-   Helm-installed CRDs. Brief LAN-IP downtime for the ingress endpoint during
-   this window is expected.
-3. **Bootstrap Flux on cp-1** — install the Flux CLI (already documented in
-   IMPLEMENTATION.md §9) and run:
+   Watch for ingress-nginx's `ingress-nginx-admission-create`/`-patch` Jobs: a Job's pod
+   template is immutable, so if the diff shows changes there, delete the completed Jobs
+   first and let Flux re-create them (they only re-generate the webhook cert).
+3. **Commit and push** both repos.
+4. **Bootstrap**, from WSL with the cluster's kubeconfig (it doesn't have to run on cp-1).
+   This step needs a GitHub PAT with repo admin rights, because bootstrap adds a deploy key,
+   so run it yourself:
    ```bash
+   curl -s https://fluxcd.io/install.sh | sudo bash
+   flux check --pre
    export GITHUB_TOKEN=<pat>
-   flux bootstrap github --owner=Akus --repository=flux-simple-kubernetes-cluster \
+   flux bootstrap github --owner=Akus --repository=2608-k8s-home-lab \
      --branch=main --path=clusters/home-lab --personal
+   git pull    # bootstrap pushes clusters/home-lab/flux-system/ to main
    ```
-   This needs a GitHub PAT — run this step yourself (or paste the token
-   directly into your own SSH session), rather than handing the token to the
-   assistant.
-4. **Verify** (from the laptop, once bootstrap is done):
+5. **Verify**:
    ```bash
-   kubectl get pods -n flux-system
-   kubectl get kustomizations -A
-   kubectl get helmrelease -A
-   kubectl get ipaddresspool,l2advertisement -n metallb-system
-   kubectl get svc -n ingress-nginx
-   curl -sv -m 5 http://192.168.1.240/     # same check as before — should still 404 from nginx
+   flux get kustomizations          # all Ready=True, in dependsOn order
+   flux get sources git             # flux-system + hil-lab
+   kubectl get pods -A | grep -v -E 'Running|Completed'   # nothing restarted or stuck
+   kubectl -n ingress-nginx get svc ingress-nginx-controller   # still 192.168.1.240
+   kubectl -n kube-system get deploy metrics-server -o jsonpath='{.spec.template.spec.containers[0].args}'
+   kubectl top nodes
+   curl -sI https://jenkins.lab.akos-demo.com
    ```
+6. **Update the docs**: in IMPLEMENTATION.md, mark the §8 `kubectl apply` commands as the
+   initial install that Flux now owns, and replace §9's placeholder bootstrap with the real
+   command. Change the cert-manager/Litmus commands in HTTPS-CERTS.md and
+   IMPLEMENTATION.md to "edit the kustomization, push". Remove the Flux item from TODO.md.
 
-## Division of labor
+## Working with Flux afterwards
 
-Steps 1–2 can be done by the assistant. Step 3 (the actual `flux bootstrap`
-invocation) needs a GitHub PAT and should be run by the user. Step 4
-(verification) can be done by the assistant once step 3 is confirmed done.
+- Changes go through `git push`. A `kubectl apply`/`patch`/`edit` on a Flux-managed object
+  gets reverted on the next reconcile (every 30m, or immediately with
+  `flux reconcile kustomization <name> --with-source`).
+- To hand-fix something without Flux undoing it: `flux suspend kustomization <name>`, fix,
+  commit the fix, `flux resume kustomization <name>`.
+- `prune: true` deletes whatever disappears from git. Removing an entry from
+  `infrastructure.yaml` deletes that whole component. For `infra-metallb` that means
+  every LoadBalancer IP; for `infra-cert-manager`, its CRDs and every Certificate. Suspend
+  first if you're restructuring.
+- Upgrades: bump the version in the URL, run `kubectl diff --server-side -k <dir>`, push.
+
+## Later
+
+- **Helm per component**, if you want the same shape as the AKS repo: delete that raw
+  install (downtime for that component), replace its `kustomization.yaml` with a
+  `HelmRepository` + `HelmRelease`. If you redo MetalLB this way, keep
+  `externalTrafficPolicy: Cluster` on ingress-nginx: with L2 mode one node answers for the VIP,
+  and `Local` blackholes traffic whenever the single ingress pod is on the other node.
+- **SOPS** for the two hand-made Secrets, so a fresh cluster can be rebuilt entirely from git.
+- **Image automation** for the lab's `latest` images, instead of
+  `kubectl -n hil-lab rollout restart deploy`.

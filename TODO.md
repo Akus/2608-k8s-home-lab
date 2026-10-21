@@ -12,23 +12,12 @@ Certificate and TLS Ingresses (not applied yet). Remaining, see HTTPS-CERTS.md O
   `*.home.lan` to `*.lab.akos-demo.com`), wait for `lab-wildcard` to be Ready on staging, then
   switch `certificate.yaml` to `letsencrypt-prod`.
 
-## Update FLUX-MIGRATION-PLAN.md to the current cluster state
+## Migrate the cluster to Flux
 
-The plan predates the HIL lab deploy. Things it doesn't cover yet:
-
-- **More raw installs to migrate:** besides MetalLB + ingress-nginx, metrics-server
-  (v0.7.2 + `--kubelet-insecure-tls` patch) and local-path-provisioner were also
-  `kubectl apply`'d by hand.
-- **The HIL lab itself:** a `GitRepository` for the lab repo plus a `Kustomization` with path
-  `./kubernetes/overlays/home-lab`. Unlike the Helm-based add-ons, it needs no teardown:
-  kustomize-controller applies server-side and adopts the objects `kubectl apply -k` created.
-- **Secrets:** the overlay builds `lab-admin-credentials` from a gitignored `secrets.env`,
-  which Flux's clone won't have. Switch to SOPS, or create the Secret by hand and drop the
-  `secretGenerator`.
-- **Order:** Flux bootstrap doesn't depend on migrating MetalLB/ingress first; the add-on
-  migration and the lab Kustomization can be done independently.
-- **Decide first whether Flux is still wanted:** `kubectl apply -k` is enough for a single-user
-  lab; Flux is mainly for push-to-deploy and GitOps practice matching the AKS clusters.
+Plan in FLUX-MIGRATION-PLAN.md (rewritten 2026-10-21): adopt the running add-ons by wrapping
+each raw install in a `kustomization.yaml`, with no Helm reinstall, and bootstrap this repo.
+Finish HTTPS first, because Flux applying the lab repo switches the Ingresses to
+`*.lab.akos-demo.com`.
 
 ## More chaos experiments
 
