@@ -1,0 +1,29 @@
+# Kill rig-api's pod every 10 s for 60 s and check the Deployment brings it back.
+#   kubectl apply -f clusters/home-lab/litmus/hil-lab/engines/pod-delete-rig-api.yaml
+#   kubectl -n hil-lab get chaosresult pod-delete-rig-api-pod-delete \
+#     -o jsonpath='{.status.experimentStatus.verdict}'      # Pass / Fail
+#   kubectl -n hil-lab delete chaosengine pod-delete-rig-api   # before re-running
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: pod-delete-rig-api
+  namespace: hil-lab
+spec:
+  engineState: active
+  appinfo:
+    appns: hil-lab
+    applabel: app.kubernetes.io/name=rig-api
+    appkind: deployment
+  chaosServiceAccount: litmus-admin
+  jobCleanUpPolicy: delete
+  experiments:
+    - name: pod-delete
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: "60"
+            - name: CHAOS_INTERVAL
+              value: "10"
+            - name: FORCE
+              value: "false"

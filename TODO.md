@@ -30,16 +30,12 @@ The plan predates the HIL lab deploy. Things it doesn't cover yet:
 - **Decide first whether Flux is still wanted:** `kubectl apply -k` is enough for a single-user
   lab; Flux is mainly for push-to-deploy and GitOps practice matching the AKS clusters.
 
-## Chaos machine in the cluster
+## More chaos experiments
 
-Run chaos experiments against the HIL lab (`hil-lab` namespace) to check it recovers from
-failures: pod kills, node drains, network latency/partition, CPU/memory stress.
+LitmusChaos operator + faults are installed (IMPLEMENTATION.md §8); only
+`engines/pod-delete-rig-api.yaml` exists so far.
 
-- Pick a tool: **Chaos Mesh** (CRD-based experiments + dashboard, covers pod/network/IO/stress
-  faults) is the likely fit; **chaoskube** is enough if random pod kills are all that's wanted;
-  LitmusChaos is heavier.
-- Install it (raw manifest/Helm, like the other add-ons in IMPLEMENTATION.md §8), scoped to
-  `hil-lab` only so it can't touch `kube-system`, MetalLB or ingress-nginx.
-- Expose the dashboard via ingress-nginx (e.g. `chaos.home.lan`), behind auth.
-- Start with a scheduled `PodChaos` on `rig-api`, then network delay between Jenkins and the
-  rigs; watch the effects in Grafana/Prometheus.
+- Network latency between Jenkins and the rigs (`pod-network-latency` on the rig-sim pods).
+- CPU/memory hog on rig-api; watch the effects in Grafana/Prometheus.
+- Schedule recurring runs (a CronJob that re-applies an engine) once the experiments are stable.
+- Install `chaos-exporter` so verdicts show up in Prometheus.

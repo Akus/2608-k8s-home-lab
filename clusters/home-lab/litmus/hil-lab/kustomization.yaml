@@ -1,0 +1,17 @@
+# Faults (ChaosExperiment CRs) and the ServiceAccount they run as, all in hil-lab. The faults
+# only get the namespaced Role in rbac.yaml, so they can't reach outside hil-lab.
+#
+#   kubectl apply -k clusters/home-lab/litmus/hil-lab
+#   kubectl apply -f clusters/home-lab/litmus/hil-lab/engines/pod-delete-rig-api.yaml  # run one
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hil-lab
+
+resources:
+  - rbac.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-charts/3.31.0/faults/kubernetes/pod-delete/fault.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-charts/3.31.0/faults/kubernetes/pod-cpu-hog/fault.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-charts/3.31.0/faults/kubernetes/pod-memory-hog/fault.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-charts/3.31.0/faults/kubernetes/pod-network-latency/fault.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-charts/3.31.0/faults/kubernetes/pod-network-loss/fault.yaml

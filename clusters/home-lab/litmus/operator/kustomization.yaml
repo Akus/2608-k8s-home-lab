@@ -1,0 +1,31 @@
+# LitmusChaos core: CRDs + chaos-operator, no ChaosCenter (its MongoDB 5+ needs ARMv8.2-A; the
+# Pi 4's Cortex-A72 is ARMv8.0). Experiments are run as ChaosEngine CRs with kubectl, see
+# ../hil-lab/. Upstream deploy/ manifests pinned to a release, but they ship the `:ci` image
+# tags, so the images are pinned below too (both multi-arch, incl. arm64).
+#
+#   kubectl apply --server-side -k clusters/home-lab/litmus/operator
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - https://raw.githubusercontent.com/litmuschaos/chaos-operator/3.31.0/deploy/chaos_crds.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-operator/3.31.0/deploy/rbac.yaml
+  - https://raw.githubusercontent.com/litmuschaos/chaos-operator/3.31.0/deploy/operator.yaml
+
+images:
+  - name: litmuschaos/chaos-operator
+    newTag: 3.31.0
+
+# Only reconcile ChaosEngines in hil-lab, so a stray engine elsewhere (kube-system, MetalLB,
+# ingress-nginx) does nothing.
+patches:
+  - target:
+      kind: Deployment
+      name: litmus
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: litmuschaos/chaos-runner:3.31.0
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: hil-lab

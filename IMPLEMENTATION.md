@@ -624,6 +624,30 @@ kubectl -n cert-manager create secret generic route53-credentials \
 kubectl apply -f clusters/home-lab/cert-manager/clusterissuers.yaml
 ```
 
+### LitmusChaos (chaos experiments)
+
+Injects failures (pod kills, CPU/memory stress, network latency/loss) into the HIL lab to
+check it recovers. Only the operator is installed, not the ChaosCenter web UI: ChaosCenter
+needs MongoDB 5+, which requires ARMv8.2-A, and the Pi 4's Cortex-A72 is ARMv8.0.
+Experiments are ChaosEngine CRs applied with kubectl.
+
+```bash
+kubectl apply --server-side -k clusters/home-lab/litmus/operator   # CRDs + chaos-operator
+kubectl apply -k clusters/home-lab/litmus/hil-lab                  # faults + litmus-admin SA
+
+# Run an experiment and read its verdict:
+kubectl apply -f clusters/home-lab/litmus/hil-lab/engines/pod-delete-rig-api.yaml
+kubectl -n hil-lab get chaosresult pod-delete-rig-api-pod-delete \
+  -o jsonpath='{.status.experimentStatus.verdict}'
+```
+
+The operator only watches `hil-lab` (`WATCH_NAMESPACE`), and the faults run as the
+`litmus-admin` ServiceAccount with a namespaced Role, so they can't touch `kube-system`,
+MetalLB or ingress-nginx. Fault definitions are pinned to chaos-charts 3.31.0; copy
+`engines/pod-delete-rig-api.yaml` and change `experiments[].name`, `applabel` and the env
+values to run the others (`pod-cpu-hog`, `pod-memory-hog`, `pod-network-latency`,
+`pod-network-loss`).
+
 ---
 
 ## 9. GitOps — Flux CD — [CP]
