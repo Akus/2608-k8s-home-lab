@@ -31,3 +31,17 @@ The plan predates the HIL lab deploy. Things it doesn't cover yet:
   migration and the lab Kustomization can be done independently.
 - **Decide first whether Flux is still wanted:** `kubectl apply -k` is enough for a single-user
   lab; Flux is mainly for push-to-deploy and GitOps practice matching the AKS clusters.
+
+## Chaos machine in the cluster
+
+Run chaos experiments against the HIL lab (`hil-lab` namespace) to check it recovers from
+failures: pod kills, node drains, network latency/partition, CPU/memory stress.
+
+- Pick a tool: **Chaos Mesh** (CRD-based experiments + dashboard, covers pod/network/IO/stress
+  faults) is the likely fit; **chaoskube** is enough if random pod kills are all that's wanted;
+  LitmusChaos is heavier.
+- Install it (raw manifest/Helm, like the other add-ons in IMPLEMENTATION.md §8), scoped to
+  `hil-lab` only so it can't touch `kube-system`, MetalLB or ingress-nginx.
+- Expose the dashboard via ingress-nginx (e.g. `chaos.home.lan`), behind auth.
+- Start with a scheduled `PodChaos` on `rig-api`, then network delay between Jenkins and the
+  rigs; watch the effects in Grafana/Prometheus.
