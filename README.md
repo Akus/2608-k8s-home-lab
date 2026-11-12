@@ -52,8 +52,8 @@ Killercoda-style with setup and verify scripts: **[runbooks/](runbooks/)**.
 The data side — Argo CD, Garage, Iceberg and the Jenkins-driven Spark pipelines that record
 what the cluster is doing to itself: **[LAKEHOUSE.md](LAKEHOUSE.md)**.
 
-How the pieces actually work, plus an inventory of every component with what it does:
-**[teachings.md](teachings.md)**.
+How the pieces actually work, an inventory of every component, and a **Gotchas** section of
+traps that each cost real debugging time: **[TEACHINGS.md](TEACHINGS.md)**.
 
 ## Buying
 
