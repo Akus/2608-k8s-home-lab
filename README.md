@@ -1,8 +1,8 @@
 # Kubernetes Home Lab — 2× Raspberry Pi 4B (8GB)
 
 Kubeadm-based, 2-node Kubernetes cluster on Raspberry Pi 4B, booting from Verbatim SSDs
-(USB boot). The GitOps layer (Flux CD) follows the same pattern used on AKS, so manifests
-and workflow stay portable between the cloud and the home lab.
+(USB boot). The GitOps layer is Argo CD, which syncs this repo and runs a small Spark +
+Iceberg lakehouse on top of the cluster — see [LAKEHOUSE.md](LAKEHOUSE.md).
 
 ## What's in it
 
@@ -13,8 +13,9 @@ and workflow stay portable between the cloud and the home lab.
 | Cluster | kubeadm, 1 control-plane + 1 worker (taint removed → both schedule) |
 | CNI | Calico |
 | Storage | local-path-provisioner (simple) or Longhorn (replicated) |
+| Data | Garage (S3) + Apache Iceberg + Spark, see [LAKEHOUSE.md](LAKEHOUSE.md) |
 | Networking | MetalLB (LoadBalancer IPs) + ingress-nginx |
-| GitOps | Flux CD |
+| GitOps | Argo CD |
 
 ## Hardware
 
@@ -36,12 +37,15 @@ and workflow stay portable between the cloud and the home lab.
 3. Install containerd + kubeadm/kubelet/kubectl on both nodes.
 4. `kubeadm init` on the control-plane, Calico CNI, worker `join`, remove taint.
 5. Storage + MetalLB + ingress-nginx.
-6. Flux CD bootstrap against the shared git repo.
+6. Argo CD bootstrap, then the lakehouse apps ([LAKEHOUSE.md](LAKEHOUSE.md)).
 
 Full, command-by-command walkthrough: **[IMPLEMENTATION.md](IMPLEMENTATION.md)**.
 
 Hands-on practice on the running cluster (deployments, troubleshooting, upgrades, backups),
 Killercoda-style with setup and verify scripts: **[runbooks/](runbooks/)**.
+
+The data side — Argo CD, Garage, Iceberg and the Jenkins-driven Spark pipelines that record
+what the cluster is doing to itself: **[LAKEHOUSE.md](LAKEHOUSE.md)**.
 
 ## Buying
 

@@ -1,0 +1,100 @@
+# Template, not a live resource — Argo does not sync this file (see kustomization.yaml).
+# Jenkins substitutes __JOB__ and __SCRIPT__ once per build:
+#
+#   sed -e 's/__JOB__/ingest-samples-42/' -e 's/__SCRIPT__/ingest_samples.py/' spark-job.yaml \
+#     | kubectl apply -f -
+#
+# By hand, to run one right now:
+#   sed -e 's/__JOB__/manual-1/' -e 's/__SCRIPT__/report.py/' spark-job.yaml | kubectl apply -f -
+#   kubectl -n lakehouse logs -f job/manual-1
+#
+# One template for all four jobs on purpose: ingest, weather, report and maintenance differ
+# only by which script runs, and keeping the Iceberg wiring in one place means it cannot drift
+# between them.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB__
+  namespace: lakehouse
+spec:
+  backoffLimit: 0 # a failure should surface in Jenkins, not silently retry
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: spark
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: spark
+          image: spark:3.5.9-scala2.12-java17-python3-ubuntu
+          command: ["/opt/spark/bin/spark-submit"]
+          args:
+            # local[2]: one pod, no executors, no shuffle service. Right for a dataset that
+            # grows by kilobytes a day, and moving to cluster mode later changes only --master.
+            - --master
+            - local[2]
+            # Iceberg is not in the Spark image; these two jars are the entire integration.
+            # iceberg-aws-bundle is what speaks S3 — the same jar against Garage or real AWS.
+            - --packages
+            - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.11.0,org.apache.iceberg:iceberg-aws-bundle:1.11.0
+            - --conf
+            - spark.jars.ivy=/ivy
+            # Needed for MERGE INTO and the CALL ... system.* maintenance procedures.
+            - --conf
+            - spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+            - --conf
+            - spark.sql.catalog.lake=org.apache.iceberg.spark.SparkCatalog
+            - --conf
+            - spark.sql.catalog.lake.type=rest
+            - --conf
+            - spark.sql.catalog.lake.uri=http://iceberg-rest:8181
+            - --conf
+            - spark.sql.catalog.lake.io-impl=org.apache.iceberg.aws.s3.S3FileIO
+            # The one line that says "not real AWS". Delete it, point the catalog warehouse at
+            # a real bucket and swap the Secret, and the same job runs against S3 proper.
+            - --conf
+            - spark.sql.catalog.lake.s3.endpoint=http://garage:3900
+            - --conf
+            - spark.sql.catalog.lake.s3.path-style-access=true
+            - --conf
+            - spark.driver.memory=1g
+            - /opt/scripts/__SCRIPT__
+          env:
+            - { name: AWS_REGION, value: garage }
+            # AWS SDK v2 >= 2.30 adds flexible checksums (x-amz-checksum-*, aws-chunked
+            # trailers) to every PUT by default. Garage rejects those with
+            # "Invalid payload signature". Both knobs are SDK-level, not Iceberg-level, so
+            # they are the fix for any S3-compatible store that is not actually AWS.
+            - { name: AWS_REQUEST_CHECKSUM_CALCULATION, value: when_required }
+            - { name: AWS_RESPONSE_CHECKSUM_VALIDATION, value: when_required }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: lakehouse-s3-credentials, key: access-key-id }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: lakehouse-s3-credentials, key: secret-access-key }
+            # Where the cluster physically is, for the weather join. Change if you move.
+            - { name: LAB_LOCATION, value: budapest }
+            - { name: LAB_LATITUDE, value: "47.4979" }
+            - { name: LAB_LONGITUDE, value: "19.0402" }
+          volumeMounts:
+            - { name: scripts, mountPath: /opt/scripts }
+            - { name: ivy, mountPath: /ivy }
+            - { name: query, mountPath: /input }
+          resources:
+            # driver.memory 1g + JVM overhead + PySpark. Leaves Jenkins its core on the
+            # current two nodes, and fits a 4GB Pi with room if you add one.
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: 2, memory: 1792Mi }
+      volumes:
+        - name: scripts
+          configMap: { name: spark-scripts }
+        - name: ivy
+          persistentVolumeClaim: { claimName: spark-ivy-cache }
+        # Only used by sql.py, via runbooks/lakehouse-sql.sh. optional:true so every other
+        # job runs happily without the ConfigMap existing at all.
+        - name: query
+          configMap:
+            name: lakehouse-query
+            optional: true

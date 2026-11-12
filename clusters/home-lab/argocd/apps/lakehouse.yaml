@@ -1,0 +1,43 @@
+# The one Argo CD Application in this lab: the Spark + Iceberg lakehouse. Applied by hand once
+# (it is the root of the tree); everything under clusters/home-lab/lakehouse/ is Argo's from
+# then on.
+#
+#   kubectl apply -f clusters/home-lab/argocd/apps/lakehouse.yaml
+#   kubectl -n argocd get app lakehouse
+#
+# The repo is public, so Argo needs no credentials. Note what is deliberately NOT managed here:
+# the S3 credentials Secret (bootstrapped by hand, see LAKEHOUSE.md) and the Spark job itself,
+# which Jenkins creates per run from spark/testresults-job.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lakehouse
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Akus/2608-k8s-home-lab.git
+    targetRevision: main
+    path: clusters/home-lab/lakehouse
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lakehouse
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false # namespace.yaml carries labels, so manage it as a resource
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        maxDuration: 5m
+  # Garage rewrites its layout/metadata constantly; without this, Argo reports OutOfSync
+  # forever on fields it does not own.
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      name: garage
+      jsonPointers:
+        - /spec/volumeClaimTemplates

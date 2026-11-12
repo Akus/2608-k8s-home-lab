@@ -1,0 +1,78 @@
+# Argo CD — the GitOps controller for this cluster. Bootstrapped by hand once (below); from
+# then on it syncs clusters/home-lab/lakehouse/ out of this repo. Flux was planned instead
+# (FLUX-MIGRATION-PLAN.md, removed 2026-11-12) but never installed, so there is nothing to
+# migrate and no second controller to collide with.
+#
+# Trimmed for the Pi: dex (no SSO — local admin only), notifications and applicationset are
+# scaled to 0, which saves ~150Mi. Scale one back up if you start wanting it.
+#
+#   kubectl create namespace argocd
+#   kubectl apply --server-side -k clusters/home-lab/argocd
+#   kubectl -n argocd rollout status deploy/argocd-server
+#   # initial admin password:
+#   kubectl -n argocd get secret argocd-initial-admin-secret \
+#     -o jsonpath='{.data.password}' | base64 -d; echo
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.6.1/manifests/install.yaml
+  - ingress.yaml
+
+images:
+  - name: quay.io/argoproj/argocd
+    newTag: v3.6.1
+
+configMapGenerator:
+  # Terminate TLS at ingress-nginx like the other lab UIs, so argocd-server must not also
+  # redirect to HTTPS itself — without this you get a redirect loop.
+  - name: argocd-cmd-params-cm
+    behavior: merge
+    literals:
+      - server.insecure=true
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+  # Components this lab does not use. Scaled to 0 rather than deleted: upgrading to a newer
+  # install.yaml stays a one-line tag bump instead of a merge conflict.
+  - target: { kind: Deployment, name: argocd-dex-server }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target: { kind: Deployment, name: argocd-notifications-controller }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target: { kind: Deployment, name: argocd-applicationset-controller }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # Upstream ships no requests/limits. On a 2-node Pi cluster an unbounded repo-server
+  # generating manifests can starve Jenkins, so give the three live components real bounds.
+  - target: { kind: Deployment, name: argocd-repo-server }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: 50m, memory: 192Mi }
+          limits:   { cpu: 500m, memory: 384Mi }
+  - target: { kind: Deployment, name: argocd-server }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: 50m, memory: 128Mi }
+          limits:   { cpu: 500m, memory: 256Mi }
+  - target: { kind: StatefulSet, name: argocd-application-controller }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests: { cpu: 100m, memory: 256Mi }
+          limits:   { cpu: 1, memory: 512Mi }

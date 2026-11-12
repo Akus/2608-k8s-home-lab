@@ -12,12 +12,41 @@ Certificate and TLS Ingresses (not applied yet). Remaining, see HTTPS-CERTS.md O
   `*.home.lan` to `*.lab.akos-demo.com`), wait for `lab-wildcard` to be Ready on staging, then
   switch `certificate.yaml` to `letsencrypt-prod`.
 
-## Migrate the cluster to Flux
+## Lakehouse — deployed, one step left
 
-Plan in FLUX-MIGRATION-PLAN.md (rewritten 2026-10-21): adopt the running add-ons by wrapping
-each raw install in a `kustomization.yaml`, with no Helm reinstall, and bootstrap this repo.
-Finish HTTPS first, because Flux applying the lab repo switches the Ingresses to
-`*.lab.akos-demo.com`.
+Deployed and verified on 2026-11-12: Argo CD, this project's own Jenkins (`ci`), Garage, the
+Iceberg REST catalog, node-exporter, and the four Spark jobs. All pods Running with 0
+restarts. `lake.ops.node_samples`, `weather`, `node_hourly` and `thermal_daily` all hold real
+data, and the outdoor-vs-Pi-temperature join returns rows. Flux was dropped — it was planned
+but never installed, so Argo CD took the GitOps slot outright.
+
+**The one thing left: push this branch.** Argo CD and the Jenkins pipelines both pull
+`https://github.com/Akus/2608-k8s-home-lab.git` at `main`, and none of these manifests are
+there yet. Until they are:
+
+- the three Argo Applications sit in `ComparisonError` ("app path does not exist") — harmless,
+  and it is why they have not pruned the hand-applied resources;
+- the four Jenkins pipelines exist but cannot check out their Jenkinsfile, so none has run.
+
+Everything was applied with `kubectl apply -k` instead, which is why it is all live.
+
+After pushing:
+
+- Watch the three Applications go Synced/Healthy; they adopt the running resources.
+- Trigger `lakehouse-ingest-samples` once by hand and confirm the agent pod spawns, kubectl is
+  fetched to the `jenkins-tools` PVC, and the Spark Job is created.
+- Then let the crons take over.
+
+Remaining decisions:
+
+- Whether the hil-lab Jenkins from 2609 is still worth running alongside this one; two
+  controllers on 8 cores is the main CPU pressure on the cluster.
+- Adopt the hand-installed add-ons (cert-manager, MetalLB, ingress-nginx, Litmus) into Argo as
+  further Applications, now that the pattern is proven.
+- Argo's and Jenkins' Ingresses are plain HTTP on `argocd.home.lan` / `ci.home.lan`; fold them
+  into the HTTPS work above.
+- `maintain.py` is the only job not yet exercised — it needs more snapshots to be interesting.
+  Runbook 32 generates them.
 
 ## More chaos experiments
 

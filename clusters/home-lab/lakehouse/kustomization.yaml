@@ -1,0 +1,32 @@
+# Spark + Iceberg lakehouse, synced by Argo CD (see ../argocd/apps/lakehouse.yaml).
+#
+# Shape, and why:
+#   garage        S3-compatible object store. Iceberg wants object storage, and the cluster has
+#                 only local-path (no RWX), so this is what makes the data shareable between
+#                 pods. Same S3 API and same iceberg-aws-bundle jars as real AWS — switching to
+#                 a real bucket later is deleting one s3.endpoint line.
+#   iceberg-rest  Iceberg REST catalog. Vendor-neutral, unlike AWS Glue, so this is portable to
+#                 the AKS side. SQLite on a PVC as its backing store: one writer in this lab,
+#                 and it keeps the image stock (the shipped default is already JDBC+SQLite).
+#                 Swap CATALOG_URI to Postgres if you ever want concurrent writers.
+#   spark/        Not applied by Argo — a Job template Jenkins stamps out per run.
+#
+#   kubectl apply -k clusters/home-lab/lakehouse     # or just let Argo do it
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lakehouse
+
+resources:
+  - namespace.yaml
+  - garage.yaml
+  - iceberg-rest.yaml
+  - rbac.yaml
+  - spark
+
+# includeSelectors stays false on purpose: Deployment/StatefulSet selectors are immutable, so
+# baking a common label into them turns a future relabel into a delete-and-recreate.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: lakehouse
+    includeSelectors: false

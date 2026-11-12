@@ -1,0 +1,36 @@
+# Jenkins for the lakehouse pipelines — this project's own controller, with no dependency on
+# the 2609 repo or the hil-lab namespace.
+#
+# Needs the `jenkins-admin` Secret first (created by hand, never committed):
+#   kubectl -n ci create secret generic jenkins-admin \
+#     --from-literal=JENKINS_ADMIN_ID=admin \
+#     --from-literal=JENKINS_ADMIN_PASSWORD='<pick one>'
+#
+#   kubectl apply -k clusters/home-lab/jenkins     # or let Argo do it
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Required: without it the generated jenkins-casc ConfigMap has no namespace and lands in
+# whatever namespace kubectl happens to be pointed at, while the Deployment looks for it in
+# `ci`. The pod then sits in Init with "configmap not found".
+namespace: ci
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - storage.yaml
+  - deployment.yaml
+  - ingress.yaml
+
+configMapGenerator:
+  - name: jenkins-casc
+    files:
+      - jenkins.yaml
+      - plugins.txt
+generatorOptions:
+  disableNameSuffixHash: true
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: lakehouse-ci
+    includeSelectors: false

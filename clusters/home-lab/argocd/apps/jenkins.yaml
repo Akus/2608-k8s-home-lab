@@ -1,0 +1,20 @@
+# This project's own Jenkins. Separate Application from the lakehouse so the data stack can be
+# torn down and rebuilt without losing CI, and vice versa.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: jenkins
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Akus/2608-k8s-home-lab.git
+    targetRevision: main
+    path: clusters/home-lab/jenkins
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ci
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

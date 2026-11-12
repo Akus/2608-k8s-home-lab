@@ -1,0 +1,9 @@
+# Minimum set for: JCasC, Kubernetes agents, declarative pipelines, Job DSL, git checkout.
+# Deliberately short — every plugin is memory on a Pi and a thing that can break an upgrade.
+configuration-as-code
+kubernetes
+workflow-aggregator
+job-dsl
+git
+timestamper
+ws-cleanup

@@ -1,0 +1,21 @@
+# Same pattern as the other lab UIs: plain HTTP on *.home.lan, TLS terminated here later when
+# HTTPS-CERTS.md Option B lands (then this becomes argocd.lab.akos-demo.com with a tls block).
+# Pairs with server.insecure=true in kustomization.yaml.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.home.lan
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80

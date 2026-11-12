@@ -1,0 +1,28 @@
+# JENKINS_HOME. Small on purpose — this controller runs four pipelines whose real work happens
+# in Spark pods, so nothing large is ever written here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home
+  namespace: ci
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 4Gi
+---
+# Shared by the ephemeral agent pods: kubectl is downloaded here once and reused, instead of
+# pulling 50MB on every one of the ~96 ingest builds a day. RWO is fine — local-path pins the
+# volume to a node, so every agent that mounts it lands on that same node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-tools
+  namespace: ci
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

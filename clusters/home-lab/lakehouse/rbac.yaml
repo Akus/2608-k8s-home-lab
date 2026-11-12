@@ -1,0 +1,64 @@
+# Two separate grants, deliberately not merged:
+#
+#  1. The Spark job (SA `spark`) reads cluster telemetry — node list for the IPs and
+#     allocatable, and metrics.k8s.io for live CPU/memory. Cluster-scoped, because nodes are.
+#     Read-only, and nothing else in the cluster is reachable with it.
+#
+#  2. The Jenkins agents create and watch Jobs here. They run as `ci/jenkins` — this project's
+#     own controller (clusters/home-lab/jenkins/), not the hil-lab one from the 2609 repo.
+#     That ServiceAccount can reach exactly two namespaces: its own, to spawn agent pods, and
+#     this one, to run Spark.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lakehouse-telemetry-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lakehouse-telemetry-reader
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: lakehouse
+roleRef:
+  kind: ClusterRole
+  name: lakehouse-telemetry-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lakehouse-job-runner
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-runs-spark
+subjects:
+  - kind: ServiceAccount
+    name: jenkins
+    namespace: ci
+roleRef:
+  kind: Role
+  name: lakehouse-job-runner
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,39 @@
+# Jenkins spawns its build agents as pods via the Kubernetes plugin, so it needs to manage
+# pods in its own namespace. Nothing cluster-scoped: the grant to create Spark Jobs over in
+# `lakehouse` is a separate RoleBinding in that namespace (lakehouse/rbac.yaml), so this
+# ServiceAccount can never reach further than the two namespaces it was given.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-agents
+  namespace: ci
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods/exec", "pods/log"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agents
+  namespace: ci
+subjects:
+  - kind: ServiceAccount
+    name: jenkins
+    namespace: ci
+roleRef:
+  kind: Role
+  name: jenkins-agents
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,20 @@
+# The Argo-managed half of the Spark setup: the ivy cache volume and the job scripts.
+# spark-job.yaml is deliberately NOT listed — it is a template Jenkins stamps out per build
+# (see jenkins/Jenkinsfile.lakehouse), not something that should exist at rest.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ivy-cache.yaml
+
+configMapGenerator:
+  - name: spark-scripts
+    files:
+      - lakehouse_common.py
+      - ingest_samples.py
+      - ingest_weather.py
+      - report.py
+      - maintain.py
+      - sql.py
+generatorOptions:
+  disableNameSuffixHash: true

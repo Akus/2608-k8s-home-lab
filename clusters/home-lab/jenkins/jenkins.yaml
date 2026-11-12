@@ -1,0 +1,151 @@
+# Jenkins Configuration as Code. Everything this controller is, rebuilt from scratch on every
+# boot — there is no state worth preserving in JENKINS_HOME beyond build history.
+#
+# Admin credentials come from the `jenkins-admin` Secret, created by hand and never committed,
+# the same rule as cert-manager/route53-credentials and lakehouse-s3-credentials.
+jenkins:
+  systemMessage: "Lakehouse CI — Spark + Iceberg on the Pi cluster. Configured by JCasC from Akus/2608-k8s-home-lab."
+  # The controller never builds: all work happens in agent pods, and anything heavy happens in
+  # a Spark Job beyond even those.
+  numExecutors: 0
+  mode: EXCLUSIVE
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+          name: "Lab Admin"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: true # dashboards readable without login; changes need it
+
+  clouds:
+    - kubernetes:
+        name: "k8s"
+        serverUrl: "https://kubernetes.default.svc"
+        namespace: "ci"
+        jenkinsUrl: "http://jenkins.ci.svc.cluster.local:8080"
+        jenkinsTunnel: "jenkins-agent.ci.svc.cluster.local:50000"
+        # Two concurrent agents maximum. The cluster has 8 cores total and the Spark Jobs the
+        # agents launch are the real consumers; letting Jenkins fan out wider just causes
+        # Pending pods.
+        containerCapStr: "2"
+        templates:
+          - name: "lakehouse"
+            label: "lakehouse"
+            namespace: "ci"
+            serviceAccount: "jenkins"
+            idleMinutes: 5 # keep a warm agent between the 15-minute ingest builds
+            containers:
+              - name: "jnlp"
+                image: "jenkins/inbound-agent:3395.v6e5377b_0fb_3c-5-jdk21"
+                resourceRequestCpu: "100m"
+                resourceRequestMemory: "256Mi"
+                resourceLimitCpu: "1"
+                resourceLimitMemory: "512Mi"
+            volumes:
+              - persistentVolumeClaim:
+                  mountPath: "/tools"
+                  claimName: "jenkins-tools"
+
+security:
+  # The Job DSL below comes from this file, which is in git — not from user input.
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: false
+
+unclassified:
+  location:
+    url: "http://ci.home.lan/"
+    adminAddress: "lab-admin@example.invalid"
+  timestamper:
+    allPipelines: true
+
+# ---- Jobs ---------------------------------------------------------------------------------
+# All four run jenkins/Jenkinsfile.lakehouse from this repo. Which Spark script each one runs
+# is derived from its job name, so there are no parameters to keep in sync here.
+# ---- Jobs ---------------------------------------------------------------------------------
+# All four run jenkins/Jenkinsfile.lakehouse from this repo. Which Spark script each one runs
+# is derived from its job name, so there is nothing to parameterise here.
+#
+# Written out four times rather than generated from a map on purpose: Job DSL evaluates job
+# names lazily, and a loop variable interpolated into pipelineJob("...${x}") binds to the
+# wrong value — you get one job with an empty suffix. Explicit beats clever in config.
+jobs:
+  - script: |
+      // bronze: node CPU, memory, SoC temperature — every 15 minutes
+      pipelineJob('lakehouse-ingest-samples') {
+          description('Lakehouse ingest-samples — Spark + Iceberg. Defined in Akus/2608-k8s-home-lab.')
+          definition {
+              cpsScm {
+                  scm {
+                      git {
+                          remote { url('https://github.com/Akus/2608-k8s-home-lab.git') }
+                          branch('main')
+                      }
+                  }
+                  scriptPath('jenkins/Jenkinsfile.lakehouse')
+                  lightweight(true)
+              }
+          }
+          triggers { cron('H/15 * * * *') }
+      }
+
+  - script: |
+      // bronze: outdoor weather from Open-Meteo — hourly
+      pipelineJob('lakehouse-ingest-weather') {
+          description('Lakehouse ingest-weather — Spark + Iceberg. Defined in Akus/2608-k8s-home-lab.')
+          definition {
+              cpsScm {
+                  scm {
+                      git {
+                          remote { url('https://github.com/Akus/2608-k8s-home-lab.git') }
+                          branch('main')
+                      }
+                  }
+                  scriptPath('jenkins/Jenkinsfile.lakehouse')
+                  lightweight(true)
+              }
+          }
+          triggers { cron('H * * * *') }
+      }
+
+  - script: |
+      // silver + gold rollups, and the weather join — daily 06:00
+      pipelineJob('lakehouse-report') {
+          description('Lakehouse report — Spark + Iceberg. Defined in Akus/2608-k8s-home-lab.')
+          definition {
+              cpsScm {
+                  scm {
+                      git {
+                          remote { url('https://github.com/Akus/2608-k8s-home-lab.git') }
+                          branch('main')
+                      }
+                  }
+                  scriptPath('jenkins/Jenkinsfile.lakehouse')
+                  lightweight(true)
+              }
+          }
+          triggers { cron('H 6 * * *') }
+      }
+
+  - script: |
+      // compaction, snapshot expiry, orphan sweep — nightly 03:00
+      pipelineJob('lakehouse-maintain') {
+          description('Lakehouse maintain — Spark + Iceberg. Defined in Akus/2608-k8s-home-lab.')
+          definition {
+              cpsScm {
+                  scm {
+                      git {
+                          remote { url('https://github.com/Akus/2608-k8s-home-lab.git') }
+                          branch('main')
+                      }
+                  }
+                  scriptPath('jenkins/Jenkinsfile.lakehouse')
+                  lightweight(true)
+              }
+          }
+          triggers { cron('H 3 * * *') }
+      }

@@ -1,0 +1,13 @@
+# Spark pulls the Iceberg jars with --packages at submit time. On a Pi over home broadband
+# that is a slow first run (~100MB from Maven Central), so the ivy cache lives on a volume and
+# every later build starts instantly. Delete the PVC to force a clean re-resolve.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-ivy-cache
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi

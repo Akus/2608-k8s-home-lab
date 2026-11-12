@@ -1,0 +1,114 @@
+# Jenkins controller. Stock upstream image — plugins are installed by an initContainer from
+# plugins.txt rather than by baking a custom image, so there is nothing to build or publish
+# and upgrading is a tag bump plus a pod restart.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: ci
+spec:
+  selector:
+    app.kubernetes.io/name: jenkins
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
+---
+# Separate Service for the JNLP port: agents connect here, and keeping it off the HTTP Service
+# means the Ingress can never accidentally expose it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-agent
+  namespace: ci
+spec:
+  selector:
+    app.kubernetes.io/name: jenkins
+  ports:
+    - { name: jnlp, port: 50000, targetPort: 50000 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: ci
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume: never two controllers on JENKINS_HOME at once
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jenkins
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jenkins
+    spec:
+      serviceAccountName: jenkins
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        # Writes into /usr/share/jenkins/ref/plugins, which Jenkins copies into JENKINS_HOME on
+        # startup. An emptyDir rather than the PVC on purpose: a plugin list change then takes
+        # effect on the next restart instead of being shadowed by a stale copy on disk.
+        - name: plugins
+          image: jenkins/jenkins:2.580.2-lts-jdk21
+          command:
+            - jenkins-plugin-cli
+            - --verbose
+            - --plugin-file=/casc/plugins.txt
+            - --plugin-download-directory=/plugins
+          volumeMounts:
+            - { name: casc, mountPath: /casc }
+            - { name: plugins, mountPath: /plugins }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 2, memory: 768Mi }
+      containers:
+        - name: jenkins
+          image: jenkins/jenkins:2.580.2-lts-jdk21
+          env:
+            - name: JAVA_OPTS
+              # Xmx below the container limit so the JVM gets OOM-killed by its own heap
+              # ceiling with a usable stack trace, rather than by the kernel with none.
+              value: >-
+                -Xmx768m
+                -Djenkins.install.runSetupWizard=false
+                -Dhudson.model.DirectoryBrowserSupport.CSP=
+            - { name: CASC_JENKINS_CONFIG, value: /casc/jenkins.yaml }
+            - name: JENKINS_ADMIN_ID
+              valueFrom:
+                secretKeyRef: { name: jenkins-admin, key: JENKINS_ADMIN_ID }
+            - name: JENKINS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: jenkins-admin, key: JENKINS_ADMIN_PASSWORD }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: jnlp, containerPort: 50000 }
+          volumeMounts:
+            - { name: jenkins-home, mountPath: /var/jenkins_home }
+            - { name: casc, mountPath: /casc }
+            - { name: plugins, mountPath: /usr/share/jenkins/ref/plugins }
+          resources:
+            requests: { cpu: 200m, memory: 640Mi }
+            limits:   { cpu: 2, memory: 1Gi }
+          # Jenkins on a Pi takes its time to boot. startupProbe gives it 5 minutes before
+          # liveness starts counting, so a slow start is not a restart loop — the failure mode
+          # the hil-lab controller has been stuck in.
+          startupProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
+      volumes:
+        - name: jenkins-home
+          persistentVolumeClaim: { claimName: jenkins-home }
+        - name: casc
+          configMap: { name: jenkins-casc }
+        - name: plugins
+          emptyDir: {}

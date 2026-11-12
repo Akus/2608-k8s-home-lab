@@ -1,0 +1,11 @@
+# The app-of-apps root. Applied by hand once, after Argo CD itself is up:
+#   kubectl apply -k clusters/home-lab/argocd/apps
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - jenkins.yaml
+  - lakehouse.yaml
+  - node-exporter.yaml

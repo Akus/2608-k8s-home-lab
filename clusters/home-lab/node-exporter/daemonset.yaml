@@ -1,0 +1,60 @@
+# node-exporter — the only way to see the things that actually matter on a Pi: SoC temperature
+# and whether the firmware is throttling. TODO.md wanted this for Prometheus alerting anyway;
+# the lakehouse is its first consumer.
+#
+# hostNetwork so every node is scrapeable at <nodeIP>:9100 with no Service or endpoint lookup —
+# the Spark ingest job already lists nodes, so it already knows the IPs.
+#
+# Temperature comes from the thermal_zone collector (on by default). If node_thermal_zone_temp
+# is missing from /metrics, that collector got disabled somewhere.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: node-exporter
+    spec:
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # The control plane is untainted in this cluster (untaint_control_plane: true), but
+      # tolerate anyway so node-exporter survives someone putting the taint back.
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: node-exporter
+          image: quay.io/prometheus/node-exporter:v1.9.1
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --web.listen-address=:9100
+          ports:
+            - { name: metrics, containerPort: 9100, hostPort: 9100 }
+          volumeMounts:
+            - { name: proc, mountPath: /host/proc, readOnly: true }
+            - { name: sys, mountPath: /host/sys, readOnly: true }
+            - { name: root, mountPath: /host/root, readOnly: true, mountPropagation: HostToContainer }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - { name: proc, hostPath: { path: /proc } }
+        - { name: sys, hostPath: { path: /sys } }
+        - { name: root, hostPath: { path: / } }

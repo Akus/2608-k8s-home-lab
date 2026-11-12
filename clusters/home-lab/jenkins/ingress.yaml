@@ -1,0 +1,21 @@
+# Plain HTTP on ci.home.lan, same pattern as the other lab UIs. Point your router/hosts file
+# at 192.168.1.240. Deliberately NOT jenkins.home.lan — that name belongs to the hil-lab
+# controller from the 2609 project, and the two are unrelated.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jenkins
+  namespace: ci
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: ci.home.lan
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jenkins
+                port:
+                  number: 8080

@@ -1,0 +1,124 @@
+// One Jenkinsfile, four jobs. Which Spark script runs is derived from the Jenkins job name,
+// so the Job DSL in clusters/home-lab/jenkins/jenkins.yaml stays a single loop and there is no
+// parameter to keep in sync:
+//
+//   lakehouse-ingest-samples  -> ingest_samples.py   every 15 min
+//   lakehouse-ingest-weather  -> ingest_weather.py   hourly
+//   lakehouse-report          -> report.py           daily
+//   lakehouse-maintain        -> maintain.py         nightly
+//
+// Set the SCRIPT parameter to override for an ad-hoc run.
+//
+// The build runs in an ephemeral agent pod spawned by the Kubernetes plugin (`lakehouse` pod
+// template, namespace `ci`). It does not run Spark itself — it stamps out
+// clusters/home-lab/lakehouse/spark/spark-job.yaml as a Kubernetes Job in the `lakehouse`
+// namespace and follows its logs. Spark gets its own pod and its own limits that way, and the
+// Job keeps running even if the controller restarts mid-build.
+
+pipeline {
+    agent { label 'lakehouse' }
+
+    parameters {
+        string(
+            name: 'SCRIPT',
+            defaultValue: '',
+            description: 'Override the Spark script. Empty = derive from the job name.'
+        )
+    }
+
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    environment {
+        NS          = 'lakehouse'
+        TOOLS       = '/tools'                       // jenkins-tools PVC, shared by all agents
+        KUBECTL_VER = 'v1.31.14'                     // matches the cluster, see ansible/group_vars/all.yml
+        TEMPLATE    = 'clusters/home-lab/lakehouse/spark/spark-job.yaml'
+    }
+
+    stages {
+        stage('Tooling') {
+            steps {
+                sh '''#!/usr/bin/env bash
+                set -euo pipefail
+                # The inbound-agent image has no kubectl. The PVC is shared across agent pods,
+                # so this downloads once ever rather than on each of the ~96 builds a day.
+                if [ ! -x "$TOOLS/kubectl" ]; then
+                    echo "fetching kubectl $KUBECTL_VER (arm64)"
+                    curl -fsSL -o "$TOOLS/kubectl.tmp" \
+                        "https://dl.k8s.io/release/$KUBECTL_VER/bin/linux/arm64/kubectl"
+                    chmod +x "$TOOLS/kubectl.tmp"
+                    mv "$TOOLS/kubectl.tmp" "$TOOLS/kubectl"   # atomic, so a killed build cannot leave a stub
+                fi
+                "$TOOLS/kubectl" version --client=true -o yaml | head -4
+                '''
+            }
+        }
+
+        stage('Submit') {
+            steps {
+                script {
+                    // lakehouse-ingest-samples -> ingest_samples.py
+                    def derived = env.JOB_NAME.tokenize('/').last()
+                        .replaceFirst(/^lakehouse-/, '').replace('-', '_') + '.py'
+                    env.SPARK_SCRIPT = params.SCRIPT?.trim() ? params.SCRIPT.trim() : derived
+                    env.K8S_JOB = "lakehouse-${env.SPARK_SCRIPT.replace('.py', '').replace('_', '-')}-${env.BUILD_NUMBER}"
+                    echo "script=${env.SPARK_SCRIPT}  job=${env.K8S_JOB}"
+                }
+                sh '''#!/usr/bin/env bash
+                set -euo pipefail
+                test -f "$TEMPLATE" || { echo "template $TEMPLATE missing"; exit 1; }
+                sed -e "s|__JOB__|${K8S_JOB}|g" -e "s|__SCRIPT__|${SPARK_SCRIPT}|g" "$TEMPLATE" \
+                    | "$TOOLS/kubectl" -n "$NS" apply -f -
+                '''
+            }
+        }
+
+        stage('Run') {
+            steps {
+                sh '''#!/usr/bin/env bash
+                set -euo pipefail
+                K="$TOOLS/kubectl -n $NS"
+
+                # Wait for the pod to exist. A first run on an empty ivy cache also pulls
+                # ~100MB of Iceberg jars from Maven Central, which is slow on a Pi — hence the
+                # generous timeouts here and on the build.
+                for _ in $(seq 1 60); do
+                    POD=$($K get pod -l job-name="$K8S_JOB" -o name 2>/dev/null | head -1 || true)
+                    [ -n "$POD" ] && break
+                    sleep 5
+                done
+                [ -n "${POD:-}" ] || { echo "no pod appeared for job/$K8S_JOB"; $K describe job "$K8S_JOB"; exit 1; }
+                echo "following $POD"
+
+                # --ignore-errors so a pod that finishes between the check and the follow does
+                # not fail the build; the real verdict is the Job status below.
+                $K logs -f --ignore-errors "$POD" || true
+
+                for _ in $(seq 1 24); do
+                    SUCCEEDED=$($K get job "$K8S_JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
+                    FAILED=$($K get job "$K8S_JOB" -o jsonpath='{.status.failed}' 2>/dev/null || true)
+                    [ "${SUCCEEDED:-0}" = "1" ] && { echo "job succeeded"; exit 0; }
+                    [ -n "${FAILED:-}" ] && [ "${FAILED:-0}" != "0" ] && break
+                    sleep 5
+                done
+
+                echo "job did not succeed:"
+                $K describe job "$K8S_JOB" | tail -20
+                exit 1
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            // Jobs carry ttlSecondsAfterFinished: 3600, so a failed run stays inspectable for
+            // an hour with `kubectl -n lakehouse logs job/<name>` and then cleans itself up.
+            echo "Kubernetes Job: ${env.K8S_JOB ?: 'not created'} (auto-removed after 1h)"
+        }
+    }
+}
