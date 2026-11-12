@@ -92,13 +92,25 @@ pipeline {
                     sleep 5
                 done
                 [ -n "${POD:-}" ] || { echo "no pod appeared for job/$K8S_JOB"; $K describe job "$K8S_JOB"; exit 1; }
-                echo "following $POD"
+
+                # The pod exists but its container may still be ContainerCreating, and
+                # `logs -f` against a pod in that state returns immediately with an error
+                # instead of waiting — which silently costs you the whole log stream. Wait for
+                # it to leave Pending first. Spark's image is 658MB, so this is not instant.
+                for _ in $(seq 1 60); do
+                    PHASE=$($K get "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                    case "${PHASE:-Pending}" in Running|Succeeded|Failed) break ;; esac
+                    sleep 5
+                done
+                echo "following $POD (phase=${PHASE:-unknown})"
 
                 # --ignore-errors so a pod that finishes between the check and the follow does
                 # not fail the build; the real verdict is the Job status below.
                 $K logs -f --ignore-errors "$POD" || true
 
-                for _ in $(seq 1 24); do
+                # Generous budget: if the log stream dropped early, this is what actually
+                # decides the build, and a cold ivy cache makes the job take minutes.
+                for _ in $(seq 1 60); do
                     SUCCEEDED=$($K get job "$K8S_JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
                     FAILED=$($K get job "$K8S_JOB" -o jsonpath='{.status.failed}' 2>/dev/null || true)
                     [ "${SUCCEEDED:-0}" = "1" ] && { echo "job succeeded"; exit 0; }
