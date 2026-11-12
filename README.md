@@ -40,6 +40,9 @@ and workflow stay portable between the cloud and the home lab.
 
 Full, command-by-command walkthrough: **[IMPLEMENTATION.md](IMPLEMENTATION.md)**.
 
+Hands-on practice on the running cluster (deployments, troubleshooting, upgrades, backups),
+Killercoda-style with setup and verify scripts: **[runbooks/](runbooks/)**.
+
 ## Buying
 
 - Cooling, cases: pi-shop.hu, rpibolt.hu, malnapc.hu

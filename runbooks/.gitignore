@@ -1,0 +1,6 @@
+# Credentials and scratch files the exercises create
+*.kubeconfig
+*.db
+notes/
+backups/
+.baseline

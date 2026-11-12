@@ -28,3 +28,21 @@ LitmusChaos operator + faults are installed (IMPLEMENTATION.md §8); only
 - CPU/memory hog on rig-api; watch the effects in Grafana/Prometheus.
 - Schedule recurring runs (a CronJob that re-applies an engine) once the experiments are stable.
 - Install `chaos-exporter` so verdicts show up in Prometheus.
+
+## Prometheus alerts
+
+The lab's Prometheus (`hil-lab`) already loads app-level rules
+(`kubernetes/base/monitoring/prometheus/config/alerts.yml` in the lab repo: rigs, Jenkins), but
+nothing receives them, and there's nothing about the cluster or the Pis themselves.
+
+- Enable Alertmanager: uncomment `../../base/extras` in the home-lab overlay (it also brings
+  sqlite-web; split it out if that's not wanted), and give it a real receiver instead of the
+  `alert-sink.invalid` webhook stub (e-mail, Telegram, ntfy, …).
+- Node/cluster metrics: node-exporter (DaemonSet) + kube-state-metrics, plus kubelet/cAdvisor
+  scraping via Kubernetes service discovery. The `cadvisor:8080` scrape job is a docker-compose
+  leftover and has no target on the cluster.
+- Rules for: node down / NotReady, CPU temperature > 70 °C (IMPLEMENTATION.md §10) and
+  throttling, disk/SSD filling up, memory pressure, pods crash-looping or stuck Pending, PVCs
+  near full, certificates expiring (cert-manager's `certmanager_certificate_expiration_timestamp_seconds`),
+  failed chaos verdicts (with `chaos-exporter`, see "More chaos experiments").
+- Expose Alertmanager's UI on `alertmanager.lab.akos-demo.com` like the other UIs.
