@@ -8,4 +8,4 @@ namespace: argocd
 resources:
   - jenkins.yaml
   - lakehouse.yaml
-  - node-exporter.yaml
+  - monitoring.yaml

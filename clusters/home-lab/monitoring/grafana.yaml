@@ -1,0 +1,92 @@
+# Grafana. Datasource and dashboards are provisioned from files (see grafana-datasources.yaml
+# and dashboard-lab.json), so everything that matters survives losing the PVC — the volume only
+# holds the SQLite of users, preferences and anything you create by hand in the UI.
+#
+# Anonymous viewer access is on: this is a home lab on a private VLAN, and having to log in to
+# glance at a temperature graph is friction with no security benefit here. Editing still needs
+# the admin login.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - { name: http, port: 3000, targetPort: 3000 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+    spec:
+      securityContext:
+        fsGroup: 472 # the grafana user in the image
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.3.0
+          env:
+            - { name: GF_SECURITY_ADMIN_USER, value: admin }
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: password
+            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer }
+            - { name: GF_ANALYTICS_REPORTING_ENABLED, value: "false" }
+            - { name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false" }
+            # Served under its own hostname at the root, so no subpath handling needed.
+            - { name: GF_SERVER_ROOT_URL, value: "http://dash.home.lan/" }
+          ports:
+            - { name: http, containerPort: 3000 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/grafana }
+            - { name: provisioning-datasources, mountPath: /etc/grafana/provisioning/datasources }
+            - { name: provisioning-dashboards, mountPath: /etc/grafana/provisioning/dashboards }
+            - { name: dashboards, mountPath: /var/lib/grafana/dashboards }
+          resources:
+            requests: { cpu: 20m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 384Mi }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 20
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 90
+            periodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: grafana-data }
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+            items: [{ key: grafana-datasources.yaml, path: datasources.yaml }]
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+            items: [{ key: grafana-dashboards.yaml, path: dashboards.yaml }]
+        - name: dashboards
+          configMap: { name: grafana-dashboard-lab }

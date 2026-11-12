@@ -1,0 +1,41 @@
+# Monitoring for this environment: Prometheus, Grafana, node-exporter and kube-state-metrics.
+#
+# Deliberately this repo's own, not the hil-lab stack from the 2609 project — that one is
+# parked at replicas 0 and its Prometheus only ever scraped the rigs and its own Jenkins.
+# This one scrapes the cluster, the Pis themselves, Argo CD and Garage.
+#
+#   kubectl apply -k clusters/home-lab/monitoring     # or let Argo do it
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - namespace.yaml
+  - node-exporter.yaml
+  - kube-state-metrics.yaml
+  - prometheus.yaml
+  - grafana.yaml
+  - ingress.yaml
+
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus.yml
+  - name: grafana-provisioning
+    files:
+      - grafana-datasources.yaml
+      - grafana-dashboards.yaml
+  - name: grafana-dashboard-lab
+    files:
+      - dashboard-lab.json
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: quay.io/prometheus/node-exporter
+    newTag: v1.9.1
+  - name: prom/prometheus
+    newTag: v3.6.0
+  - name: grafana/grafana
+    newTag: 12.3.0

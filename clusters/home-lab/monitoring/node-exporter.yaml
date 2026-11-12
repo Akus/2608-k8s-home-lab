@@ -7,11 +7,6 @@
 #
 # Temperature comes from the thermal_zone collector (on by default). If node_thermal_zone_temp
 # is missing from /metrics, that collector got disabled somewhere.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
----
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

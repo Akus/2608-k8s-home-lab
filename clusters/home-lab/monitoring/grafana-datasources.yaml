@@ -1,0 +1,24 @@
+# Provisioned, not clicked: the datasource is recreated from this file on every boot, so a
+# wiped PVC costs nothing.
+apiVersion: 1
+
+# Grafana cannot change an existing datasource's uid in place — provisioning looks it up by
+# uid, does not find it, and the whole provisioning module fails to start ("data source not
+# found"), which crash-loops the pod. Deleting by name first makes the apply idempotent and
+# any future uid or type change safe.
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    # Pinned uid: dashboard-lab.json references the datasource by uid, and without this
+    # Grafana generates a random one per install — the panels then render empty with
+    # "datasource not found". Any dashboard added later should use this same uid.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 30s   # matches the scrape interval, so rate() windows behave

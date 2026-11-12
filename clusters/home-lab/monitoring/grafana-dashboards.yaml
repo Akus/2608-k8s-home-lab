@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: lab
+    orgId: 1
+    folder: Home lab
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true    # edit in the UI to experiment; the file wins on restart
+    options:
+      path: /var/lib/grafana/dashboards

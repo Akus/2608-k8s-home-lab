@@ -1,0 +1,23 @@
+# Monitoring for this environment: Prometheus, Grafana, node-exporter, kube-state-metrics.
+# Its own Application so the lakehouse can be torn down and rebuilt without losing the metrics
+# history that would tell you why you tore it down.
+#
+# Replaced the earlier `node-exporter` Application, which covered only the DaemonSet.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Akus/2608-k8s-home-lab.git
+    targetRevision: main
+    path: clusters/home-lab/monitoring
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -83,18 +83,27 @@ LitmusChaos operator + faults are installed (IMPLEMENTATION.md §8); only
 
 ## Prometheus alerts
 
-The lab's Prometheus (`hil-lab`) already loads app-level rules
-(`kubernetes/base/monitoring/prometheus/config/alerts.yml` in the lab repo: rigs, Jenkins), but
-nothing receives them, and there's nothing about the cluster or the Pis themselves.
+This environment now has its own Prometheus and Grafana in `monitoring`
+(`clusters/home-lab/monitoring/`), replacing the hil-lab pair that only ever scraped the rigs
+and its own Jenkins. node-exporter and kube-state-metrics are in, and the scrape config uses
+Kubernetes service discovery throughout — so the `cadvisor:8080` static target that was a
+docker-compose leftover is gone rather than ported.
 
-- Enable Alertmanager: uncomment `../../base/extras` in the home-lab overlay (it also brings
-  sqlite-web; split it out if that's not wanted), and give it a real receiver instead of the
-  `alert-sink.invalid` webhook stub (e-mail, Telegram, ntfy, …).
-- Node/cluster metrics: node-exporter (DaemonSet) + kube-state-metrics, plus kubelet/cAdvisor
-  scraping via Kubernetes service discovery. The `cadvisor:8080` scrape job is a docker-compose
-  leftover and has no target on the cluster.
-- Rules for: node down / NotReady, CPU temperature > 70 °C (IMPLEMENTATION.md §10) and
-  throttling, disk/SSD filling up, memory pressure, pods crash-looping or stuck Pending, PVCs
-  near full, certificates expiring (cert-manager's `certmanager_certificate_expiration_timestamp_seconds`),
-  failed chaos verdicts (with `chaos-exporter`, see "More chaos experiments").
-- Expose Alertmanager's UI on `alertmanager.lab.akos-demo.com` like the other UIs.
+Covered by the `Home lab` dashboard on `dash.home.lan`: Pi SoC temperature against the 70 °C
+throttle threshold, CPU and memory per node, root filesystem usage, container restarts by
+namespace, and pods not Running.
+
+Still to do:
+
+- **No alerting at all yet.** There is no Alertmanager and no rule files — the dashboard will
+  show you a hot Pi only if you happen to be looking. Rules worth writing first: node
+  NotReady, SoC temperature > 70 °C sustained, disk above 80%, pods crash-looping, PVCs near
+  full, certificates expiring (`certmanager_certificate_expiration_timestamp_seconds`), and
+  Argo CD apps stuck OutOfSync.
+- Pick a receiver that actually reaches you (ntfy, Telegram, e-mail) rather than the
+  `alert-sink.invalid` webhook stub the hil-lab config used.
+- Scrape the lakehouse itself: Garage's admin endpoint is already a scrape job, but nothing
+  records Iceberg table/file counts, which is the leading indicator for the small-file problem
+  in runbook 32.
+- Our Jenkins has no Prometheus plugin, so there are no build metrics. Add it to
+  `plugins.txt` if build duration/failure trends are worth having.

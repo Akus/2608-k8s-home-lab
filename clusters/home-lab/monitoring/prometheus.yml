@@ -1,0 +1,107 @@
+# Prometheus scrape config for the lab. Everything uses Kubernetes service discovery rather
+# than static targets, so new nodes and pods are picked up without editing this file — the
+# mistake the hil-lab config made with its hardcoded `cadvisor:8080` leftover from compose.
+global:
+  scrape_interval: 30s        # 30s not 15s: two Pis, and this data is for trends, not tracing
+  evaluation_interval: 30s
+  external_labels:
+    cluster: home-lab
+
+scrape_configs:
+  # --- Prometheus itself -------------------------------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # --- The Pis: CPU, memory, disk, and SoC temperature -------------------------------------
+  # node-exporter is hostNetwork, so the pod IP is the node IP and :9100 is reachable directly.
+  - job_name: node-exporter
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { names: [monitoring] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        regex: node-exporter
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+      - source_labels: [__address__]
+        regex: "(.*):.*"
+        replacement: "$1:9100"
+        target_label: __address__
+
+  # --- Cluster object state ----------------------------------------------------------------
+  - job_name: kube-state-metrics
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces: { names: [monitoring] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        regex: kube-state-metrics;metrics
+        action: keep
+
+  # --- kubelet and cAdvisor: per-container CPU/memory --------------------------------------
+  # Scraped through the API server proxy so no kubelet port needs to be reachable directly,
+  # and the ServiceAccount token is the only credential involved.
+  - job_name: kubelet-cadvisor
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+
+  - job_name: kubelet
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics
+
+  # --- Argo CD -----------------------------------------------------------------------------
+  # Sync failures and app health are the things most worth alerting on in a GitOps cluster.
+  - job_name: argocd
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces: { names: [argocd] }
+    relabel_configs:
+      # Filter on the PORT name, not the service name: argocd-repo-server exposes
+      # server:8081 (gRPC) alongside metrics:8084, and selecting the service alone scrapes
+      # the gRPC port and reports 404s. This also self-limits to what is actually running —
+      # dex, notifications and applicationset are at 0 replicas, so they have no endpoints.
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_service_name]
+        target_label: component
+
+  # --- Garage ------------------------------------------------------------------------------
+  # Its admin API exposes bucket/object counts, which is how you watch the lakehouse grow
+  # (and notice the small-file problem from runbook 32 before a query gets slow).
+  - job_name: garage
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces: { names: [lakehouse] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        regex: garage;admin
+        action: keep

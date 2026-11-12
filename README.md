@@ -14,6 +14,7 @@ Iceberg lakehouse on top of the cluster — see [LAKEHOUSE.md](LAKEHOUSE.md).
 | CNI | Calico |
 | Storage | local-path-provisioner (simple) or Longhorn (replicated) |
 | Data | Garage (S3) + Apache Iceberg + Spark, see [LAKEHOUSE.md](LAKEHOUSE.md) |
+| Monitoring | Prometheus + Grafana + node-exporter + kube-state-metrics |
 | Networking | MetalLB (LoadBalancer IPs) + ingress-nginx |
 | GitOps | Argo CD |
 
@@ -40,7 +41,8 @@ Iceberg lakehouse on top of the cluster — see [LAKEHOUSE.md](LAKEHOUSE.md).
 6. Argo CD bootstrap, then the lakehouse apps ([LAKEHOUSE.md](LAKEHOUSE.md)).
 
 Web UIs on the lab network (add them to your hosts file / router DNS, all → `192.168.1.240`):
-`argocd.home.lan` (Argo CD) and `ci.home.lan` (Jenkins for the lakehouse pipelines).
+`argocd.home.lan` (Argo CD), `ci.home.lan` (Jenkins for the lakehouse pipelines),
+`dash.home.lan` (Grafana) and `metrics.home.lan` (Prometheus).
 
 Full, command-by-command walkthrough: **[IMPLEMENTATION.md](IMPLEMENTATION.md)**.
 

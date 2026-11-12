@@ -1,0 +1,40 @@
+# Hostnames deliberately avoid grafana.home.lan / prometheus.home.lan: those Ingress objects
+# still exist in hil-lab (from the 2609 repo), and ingress-nginx resolves a duplicate host in
+# favour of the OLDEST Ingress — so reusing them would silently route to the parked stack
+# instead of this one. Distinct names also mean hil-lab can be scaled back up any time without
+# a collision.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: metrics.home.lan
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus
+                port:
+                  number: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dash.home.lan
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000

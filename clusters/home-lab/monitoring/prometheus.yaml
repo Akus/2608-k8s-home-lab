@@ -1,0 +1,109 @@
+# Prometheus. Scrape config is in prometheus.yml next to this file; RBAC below is read-only and
+# exists so Kubernetes service discovery works and the kubelet can be scraped through the API
+# server proxy.
+#
+# 15d retention and a 4Gi volume: at a 30s interval over two nodes this is nowhere near full,
+# and the point is trends over weeks, not forensic detail.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "nodes/proxy", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: prometheus
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - { name: http, port: 9090, targetPort: 9090 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume: never two Prometheus on the same TSDB
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        fsGroup: 65534 # nobody, which is what the image runs as
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.6.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=15d
+            # Hot-reload after editing prometheus.yml, instead of restarting and losing the
+            # scrape gap. Note: send SIGHUP — `wget --post-data` in this image does not
+            # actually POST, so `wget -qO- .../-/reload` silently does nothing and you are
+            # left debugging a config that is on disk but not loaded:
+            #   kubectl -n monitoring exec deploy/prometheus -- kill -HUP 1
+            # Verify with /api/v1/status/config, not by reading the mounted file.
+            - --web.enable-lifecycle
+          ports:
+            - { name: http, containerPort: 9090 }
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus }
+            - { name: data, mountPath: /prometheus }
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits:   { cpu: 1, memory: 768Mi }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9090 }
+            initialDelaySeconds: 15
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: 9090 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap: { name: prometheus-config }
+        - name: data
+          persistentVolumeClaim: { claimName: prometheus-data }
