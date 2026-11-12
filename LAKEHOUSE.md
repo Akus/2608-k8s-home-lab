@@ -244,6 +244,7 @@ and a solution folded away at the bottom.
 | | [30](runbooks/30-lakehouse-s3-auth/) Spark fails, nobody changed Spark | [40](runbooks/40-schema-evolution/) Add a column to a live table |
 | | [31](runbooks/31-s3-key-rotation/) Rotate S3 credentials, no downtime | [41](runbooks/41-time-travel-rollback/) Roll back a bad write |
 | | [32](runbooks/32-iceberg-maintenance/) 400 files, 12 rows | [42](runbooks/42-new-ingest-job/) Ship a new dataset end to end |
+| | | [43](runbooks/43-duckdb-connection/) Query it from a SQL client on your desk |
 
 Ad-hoc SQL, for those and for poking around:
 
@@ -254,6 +255,11 @@ runbooks/lakehouse-sql.sh "SELECT * FROM lake.ops.node_samples ORDER BY recorded
 Each call is a fresh Spark pod, so budget ~60-90s per query. That is the honest cost of
 local[2] batch jobs instead of a long-lived engine — and the first thing you would replace
 with a Thrift server or Trino if this stopped being a lab.
+
+For interactive exploration, skip Spark entirely and point DuckDB at the catalog over a
+port-forward — runbook [43](runbooks/43-duckdb-connection/) sets that up. It reads the tables
+happily but cannot run Iceberg's `system.*` procedures or query `.snapshots`, because those
+belong to the engine rather than the format. Reading is the easy half.
 
 ## 9. Moving to real AWS S3
 

@@ -76,6 +76,7 @@ assume no Spark or Iceberg background and build up from a single `ALTER TABLE`.
 | [40](40-schema-evolution/) | Add a column to a live table without rewriting | Iceberg field ids, metadata-only DDL |
 | [41](41-time-travel-rollback/) | A bad job wrote garbage into the table | snapshots, `VERSION AS OF`, `rollback_to_snapshot` |
 | [42](42-new-ingest-job/) | Ship a new dataset end to end | writing a job, least-privilege RBAC, scheduling it |
+| [43](43-duckdb-connection/) | Query the lakehouse from a SQL client on your desk | Iceberg REST clients, port-forward, engine vs. format |
 
 ### Running SQL against the lakehouse
 
@@ -104,4 +105,6 @@ ones. Do 21 (etcd backup) before 22 (upgrade).
 
 For the lakehouse, do 40 before 41 (41's setup writes a row shaped by 40's column), and 32
 before 41 if you want to see how expiry limits the rollback window. 30 → 31 is the natural
-pair: break it, then learn the order that avoids breaking it.
+pair: break it, then learn the order that avoids breaking it. 43 stands alone and is the
+cheapest one to start with — it ends with a local SQL prompt on the real tables, which makes
+every other lakehouse scenario easier to explore.
