@@ -36,9 +36,33 @@ for _ in $(seq 1 60); do
 done
 [[ -n "${POD:-}" ]] || { echo "pod never appeared" >&2; exit 1; }
 
-# Only the script's own output matters; Spark's startup chatter goes to stderr.
-kubectl -n $NS logs -f --ignore-errors "$POD" 2>/dev/null | grep -vE '^\s*$|WARN|INFO'
+# Wait for the container to actually start. `kubectl logs -f` against a pod still in
+# ContainerCreating returns immediately with an error instead of waiting, so without this you
+# get no output at all and a spurious failure.
+for _ in $(seq 1 90); do
+    PHASE=$(kubectl -n $NS get "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    case "${PHASE:-Pending}" in Running|Succeeded|Failed) break ;; esac
+    sleep 5
+done
 
-SUCCEEDED=$(kubectl -n $NS get job "$JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
-kubectl -n $NS delete job "$JOB" --wait=false >/dev/null 2>&1 || true
-[[ "${SUCCEEDED:-0}" == "1" ]] || { echo "query failed — see: kubectl -n $NS logs $POD" >&2; exit 1; }
+# Only the script's own output matters; Spark's startup chatter goes to stderr.
+kubectl -n $NS logs -f --ignore-errors "$POD" 2>/dev/null | grep -vE '^\s*$|WARN|INFO' || true
+
+# Then wait for a real verdict rather than reading the status the instant the stream ends.
+for _ in $(seq 1 60); do
+    SUCCEEDED=$(kubectl -n $NS get job "$JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
+    FAILED=$(kubectl -n $NS get job "$JOB" -o jsonpath='{.status.failed}' 2>/dev/null || true)
+    [[ "${SUCCEEDED:-0}" == "1" ]] && break
+    [[ -n "${FAILED:-}" && "${FAILED:-0}" != "0" ]] && break
+    sleep 5
+done
+
+if [[ "${SUCCEEDED:-0}" == "1" ]]; then
+    kubectl -n $NS delete job "$JOB" --wait=false >/dev/null 2>&1 || true
+else
+    # Deliberately NOT deleted on failure: the pod and its logs are the only evidence.
+    echo "query failed. Inspect it with:" >&2
+    echo "  kubectl -n $NS logs $POD" >&2
+    echo "  kubectl -n $NS delete job $JOB    # when done" >&2
+    exit 1
+fi
