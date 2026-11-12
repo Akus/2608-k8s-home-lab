@@ -39,6 +39,9 @@ Iceberg lakehouse on top of the cluster — see [LAKEHOUSE.md](LAKEHOUSE.md).
 5. Storage + MetalLB + ingress-nginx.
 6. Argo CD bootstrap, then the lakehouse apps ([LAKEHOUSE.md](LAKEHOUSE.md)).
 
+Web UIs on the lab network (add them to your hosts file / router DNS, all → `192.168.1.240`):
+`argocd.home.lan` (Argo CD) and `ci.home.lan` (Jenkins for the lakehouse pipelines).
+
 Full, command-by-command walkthrough: **[IMPLEMENTATION.md](IMPLEMENTATION.md)**.
 
 Hands-on practice on the running cluster (deployments, troubleshooting, upgrades, backups),

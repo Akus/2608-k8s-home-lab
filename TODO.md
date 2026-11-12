@@ -12,41 +12,64 @@ Certificate and TLS Ingresses (not applied yet). Remaining, see HTTPS-CERTS.md O
   `*.home.lan` to `*.lab.akos-demo.com`), wait for `lab-wildcard` to be Ready on staging, then
   switch `certificate.yaml` to `letsencrypt-prod`.
 
-## Lakehouse — deployed, one step left
+## Lakehouse — deployed and running
 
-Deployed and verified on 2026-11-12: Argo CD, this project's own Jenkins (`ci`), Garage, the
-Iceberg REST catalog, node-exporter, and the four Spark jobs. All pods Running with 0
-restarts. `lake.ops.node_samples`, `weather`, `node_hourly` and `thermal_daily` all hold real
-data, and the outdoor-vs-Pi-temperature join returns rows. Flux was dropped — it was planned
-but never installed, so Argo CD took the GitOps slot outright.
+Deployed, pushed and verified on 2026-11-12. Argo CD, this project's own Jenkins (`ci`),
+Garage, the Iceberg REST catalog, node-exporter and the four Spark pipelines. All three Argo
+Applications Synced/Healthy; all pods Running with 0 restarts.
 
-**The one thing left: push this branch.** Argo CD and the Jenkins pipelines both pull
-`https://github.com/Akus/2608-k8s-home-lab.git` at `main`, and none of these manifests are
-there yet. Until they are:
+The full path is proven end to end: a cron-triggered Jenkins build spawns an agent pod, fetches
+kubectl to the `jenkins-tools` PVC, stamps `spark-job.yaml`, and the Spark Job appends to
+Iceberg — `lakehouse-ingest-samples` #3 ran unattended in 79s. `lake.ops.node_samples`,
+`weather`, `node_hourly` and `thermal_daily` all hold real data, and the outdoor-vs-Pi
+temperature join returns rows.
 
-- the three Argo Applications sit in `ComparisonError` ("app path does not exist") — harmless,
-  and it is why they have not pruned the hand-applied resources;
-- the four Jenkins pipelines exist but cannot check out their Jenkinsfile, so none has run.
+Measured idle footprint ~615Mi (LAKEHOUSE.md §7), far under the pre-deployment estimate.
 
-Everything was applied with `kubectl apply -k` instead, which is why it is all live.
+Still open:
 
-After pushing:
-
-- Watch the three Applications go Synced/Healthy; they adopt the running resources.
-- Trigger `lakehouse-ingest-samples` once by hand and confirm the agent pod spawns, kubectl is
-  fetched to the `jenkins-tools` PVC, and the Spark Job is created.
-- Then let the crons take over.
-
-Remaining decisions:
-
-- Whether the hil-lab Jenkins from 2609 is still worth running alongside this one; two
-  controllers on 8 cores is the main CPU pressure on the cluster.
+- `maintain.py` is the only job not yet exercised — it needs accumulated snapshots to do
+  anything visible. Runbook `32` generates them.
+- Add `ci.home.lan` and `argocd.home.lan` to the workstation hosts file / router DNS; both are
+  plain HTTP and should fold into the HTTPS work above.
 - Adopt the hand-installed add-ons (cert-manager, MetalLB, ingress-nginx, Litmus) into Argo as
-  further Applications, now that the pattern is proven.
-- Argo's and Jenkins' Ingresses are plain HTTP on `argocd.home.lan` / `ci.home.lan`; fold them
-  into the HTTPS work above.
-- `maintain.py` is the only job not yet exercised — it needs more snapshots to be interesting.
-  Runbook 32 generates them.
+  further Applications, now that the pattern is proven on three.
+- Argo's `ignoreDifferences` on Garage's volumeClaimTemplates is a guess that has not been
+  stress-tested; if the app flaps OutOfSync, that is the first place to look.
+
+## hil-lab (2609) is scaled to zero
+
+Done 2026-11-12. All eight `hil-lab` Deployments are at `replicas: 0`. Its Jenkins was pegged
+at 991m against a 1-core limit, failing its 5s liveness probe and SIGKILL-restarting (278
+restarts) — and this project has its own Jenkins in `ci` now, so it was pure legacy.
+
+Cluster CPU went from 66%/38% to 18%/9% across the two nodes.
+
+**Nothing was deleted.** All six PVCs are still Bound with their data (jenkins-home 4Gi,
+prometheus-data 4Gi, maven-repo 2Gi, agent-workdir 2Gi, grafana-data 1Gi, rig-api-data
+512Mi). All PVs are `Delete` reclaim policy, so deleting the namespace *would* destroy that
+data permanently — scaling avoids the question entirely.
+
+To bring it back:
+
+```bash
+kubectl -n hil-lab scale deploy --all --replicas=1
+```
+
+**What does not work while it is down** — worth knowing before you hit it rather than after:
+
+- The LitmusChaos operator is scoped `WATCH_NAMESPACE=hil-lab`
+  (`clusters/home-lab/litmus/operator/`), so there is nothing for it to target, and
+  `litmus/hil-lab/engines/pod-delete-rig-api.yaml` has no pod to kill.
+- Runbooks `04-rbac-ci-deployer`, `16-node-notready`, `20-drain-node`, `23-certificates` and
+  `25-chaos-game-day` all reference `hil-lab` or `rig-api`.
+- `grafana.home.lan`, `prometheus.home.lan`, `jenkins.home.lan` and `rig-api.home.lan` return
+  nothing. The replacements for this environment are `ci.home.lan` (Jenkins) and
+  `argocd.home.lan`.
+
+If you decide to retire it for good rather than park it: re-scope the Litmus operator off
+`hil-lab` first, then rewrite or retire those five runbooks, then delete the namespace. Back
+up the PVCs if any of that data matters.
 
 ## More chaos experiments
 
